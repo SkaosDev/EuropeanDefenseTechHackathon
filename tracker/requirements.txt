@@ -1,0 +1,15 @@
+# Dépendances Python (offline-friendly).
+#
+# NOTE : picamera2 N'EST PAS ici — il s'installe via apt (python3-picamera2),
+#        cf. setup.sh. Il n'est pas disponible/pip-installable sur Windows.
+#
+# opencv-python-headless : suffisant pour le pipeline + flux MJPEG (pas de fenêtre).
+#   -> Pour utiliser l'affichage local cv2.imshow (output.display: true),
+#      remplacer par "opencv-contrib-python" (fenêtre + trackers CSRT legacy).
+
+ultralytics>=8.3.0
+opencv-python-headless>=4.10.0
+flask>=3.0.0
+numpy>=1.26.0
+pyyaml>=6.0
+loguru>=0.7.0

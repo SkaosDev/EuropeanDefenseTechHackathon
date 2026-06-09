@@ -1,0 +1,66 @@
+# ============================================================================
+#  Configuration DEV — Windows / macOS (webcam USB, PAS de PiCam).
+#  Utilisation :  python main.py --config config.dev.yaml --headless
+#  Flux vidéo   :  http://localhost:5000/
+# ============================================================================
+
+camera:
+  use_picamera: false         # PC de dev : webcam OpenCV (pas de libcamera)
+  source: 0                   # index de la webcam (0 = par défaut ; essayer 1 si besoin)
+  resolution: [640, 480]
+  fps: 30
+  format: "RGB888"            # ignoré en mode webcam
+
+detection:
+  # flying (rapide+précis, recommandé) | drone (x, lourd) | base (COCO, rapide, sans drone)
+  # Override : python main.py --config config.dev.yaml --model base
+  model: "flying"
+  device: "cpu"
+  iou_threshold: 0.5
+
+  models:
+    flying:
+      path: "models/flying_yolov8m.pt"
+      classes: []
+      class_names: ["drone", "avion", "helico", "oiseau", "drone"]
+      priority_class: "drone"
+      confidence: 0.25
+      inference_size: 640
+    drone:
+      path: "models/drone_yolov8x.pt"
+      classes: ["drone"]
+      priority_class: "drone"
+      confidence: 0.25
+      inference_size: 640         # ne pas baisser sous 640 (petits drones)
+    base:
+      path: "models/yolov8n.pt"
+      classes: []
+      priority_class: "person"
+      confidence: 0.40
+      inference_size: 640
+
+tracking:
+  max_lost_frames: 30
+  min_hits: 3
+
+distance:
+  # Basée sur la LARGEUR de bbox (stable quand on se penche) + lissage EMA par track.
+  enable: true
+  hfov_deg: 60                # webcam typique ~60° (ajuster si distances biaisées)
+  smoothing: 0.3
+  default_width_m: 0.5
+  known_widths_m:
+    drone: 0.4
+    person: 0.5
+    bird: 0.3
+    airplane: 10.0
+
+output:
+  display: false              # true = fenêtre OpenCV locale (nécessite opencv-contrib-python)
+  mjpeg_stream: true          # priorité : flux navigateur, marche partout
+  mjpeg_host: "127.0.0.1"     # dev local uniquement (mettre 0.0.0.0 pour exposer sur le réseau)
+  mjpeg_port: 5000
+  log_path: "logs/detections.json"
+  log_rotation_mb: 10
+  draw_trajectory: true
+  trajectory_length: 50

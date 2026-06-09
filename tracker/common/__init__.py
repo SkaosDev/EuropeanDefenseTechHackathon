@@ -1,0 +1,1 @@
+"""Types et utilitaires partagés."""

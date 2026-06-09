@@ -1,0 +1,37 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Environnement virtuel ---
+venv/
+.venv/
+env/
+
+# --- Modèles (téléchargés au setup, lourds) ---
+models/*.pt
+models/*.onnx
+models/*.engine
+
+# --- Logs générés ---
+logs/*.json
+logs/*.json.*
+
+# --- Artefacts de test / sorties ---
+*.png
+run.log
+diag*.py
+
+# --- IDE / éditeurs ---
+.idea/
+.vscode/
+*.iml
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# On garde les dossiers vides versionnés :
+!models/.gitkeep
+!logs/.gitkeep

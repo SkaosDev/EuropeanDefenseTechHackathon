@@ -1,0 +1,68 @@
+# ============================================================================
+#  Configuration centrale du système de tracking embarqué.
+#  Tous les paramètres ajustables sont ici — aucun "magic number" dans le code.
+# ============================================================================
+
+camera:
+  use_picamera: true          # true = PiCam (libcamera), false ou fallback = webcam USB
+  source: 0                   # index de la webcam si fallback OpenCV
+  resolution: [640, 480]      # [largeur, hauteur]
+  fps: 30
+  format: "RGB888"            # format picamera2 (renvoie un buffer compatible BGR)
+
+detection:
+  # Choix du modèle (surchargeable : python main.py --model flying|drone|base) :
+  #   "flying" : YOLOv8m objets volants (drone/avion/hélico/oiseau) — RAPIDE (~3.5 fps) + précis. (recommandé)
+  #   "drone"  : YOLOv8x fine-tuné drone, 1 classe — un peu plus spécialisé mais lourd (~1.4 fps).
+  #   "base"   : YOLOv8n COCO, 80 classes générales — très rapide (~7 fps), SANS classe drone.
+  model: "flying"
+  device: "cpu"
+  iou_threshold: 0.5
+
+  models:
+    flying:                         # YOLOv8m objets volants — bon compromis vitesse/précision
+      path: "models/flying_yolov8m.pt"
+      classes: []                   # toutes (drone, avion, hélico, oiseau)
+      class_names: ["drone", "avion", "helico", "oiseau", "drone"]  # renomme les labels (cyrillique) par index
+      priority_class: "drone"
+      confidence: 0.25
+      inference_size: 640
+    drone:                          # YOLOv8x fine-tuné drone (lourd : ~1.4 fps)
+      path: "models/drone_yolov8x.pt"
+      classes: ["drone"]
+      priority_class: "drone"
+      confidence: 0.25              # bas : l'Avata est atypique, on capte davantage
+      inference_size: 640           # 640 mini — downscaler tue les petits drones (MDPI 2023)
+    base:                           # YOLOv8n COCO : rapide, généraliste (PAS de drones)
+      path: "models/yolov8n.pt"
+      classes: []
+      priority_class: "person"
+      confidence: 0.40
+      inference_size: 640
+
+tracking:
+  max_lost_frames: 30         # frames avant d'oublier un objet disparu
+  min_hits: 3                 # détections avant d'afficher un track (anti-faux positifs)
+
+distance:
+  # Estimation monoculaire basée sur la LARGEUR de la bbox (plus stable que la hauteur :
+  # se pencher n'éloigne plus l'objet). Lissée dans le temps par track (EMA).
+  enable: true
+  hfov_deg: 66                # champ de vision horizontal (PiCam v3 ~66°, webcam ~60°)
+  smoothing: 0.3              # poids EMA : 0 = figé, 1 = brut (réactif mais bruité)
+  default_width_m: 0.5        # largeur réelle supposée si la classe est inconnue
+  known_widths_m:             # largeur réelle typique par classe (mètres)
+    drone: 0.4                # quadricoptère / classe aliasée
+    person: 0.5              # largeur d'épaules
+    bird: 0.3
+    airplane: 10.0
+
+output:
+  display: false              # fenêtre OpenCV imshow (nécessite un écran + opencv non-headless)
+  mjpeg_stream: true          # serveur MJPEG (priorité démo, fonctionne en headless)
+  mjpeg_host: "0.0.0.0"
+  mjpeg_port: 5000
+  log_path: "logs/detections.json"
+  log_rotation_mb: 10
+  draw_trajectory: true
+  trajectory_length: 50

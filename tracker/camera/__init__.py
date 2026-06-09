@@ -1,0 +1,1 @@
+"""Capture vidéo (PiCam / webcam)."""
