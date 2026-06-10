@@ -11,10 +11,9 @@ leur **distance** à la caméra, le tout sur un **tableau de bord web unique** (
 
 ## ✨ Fonctionnalités
 
-- **Trois modèles au choix, tous en local** (`detection.model` ou `--model`) :
-  - **`flying`** *(défaut, recommandé)* — YOLOv8m objets volants (drone / avion / hélico /
-    oiseau), **~3.6 fps**, détecte les drones (85 % en val) — meilleur compromis vitesse/précision.
-  - **`drone`** — YOLOv8x fine-tuné drone (1 classe), un peu plus spécialisé mais lourd (**~1.4 fps**).
+- **Deux modèles au choix, tous en local** (`detection.model` ou `--model`) :
+  - **`drone`** *(défaut)* — YOLO11n **entraîné maison** sur ~30,7k images (3 classes :
+    drone / bird / airplane), léger (~5,4 Mo) — **~10-15 fps sur Pi 5 en NCNN**.
   - **`base`** — YOLOv8n COCO, 80 classes générales, **~7 fps** (rapide, mais ne voit pas les drones).
 - **Tracking** ByteTrack : IDs persistants + trajectoires.
 - **Estimation de distance** monoculaire (focale + largeur réelle), lissée par track.
@@ -28,26 +27,26 @@ leur **distance** à la caméra, le tout sur un **tableau de bord web unique** (
 ## 🛸 Détection de drones (important)
 
 Thème **contre-drone** (Shahed, FPV fibre optique…). **YOLOv8n COCO ne sait PAS détecter un
-drone** → on fournit deux modèles entraînés à détecter les drones (+ le COCO de base), tous
-téléchargés en local. On choisit avec `detection.model` ou `--model flying|drone|base`.
+drone** → le modèle `drone` est un **YOLO11n entraîné maison** (les anciens modèles tiers
+flying/yolov8x ont été retirés : détection médiocre et bien trop lourds pour le Pi).
+On choisit avec `detection.model` ou `--model drone|base`.
 
-| `--model` | Modèle | Classes | Vitesse (CPU) |
-|-----------|--------|---------|---------------|
-| **`flying`** *(défaut)* | [Javvanny yolov8m_flying_objects](https://huggingface.co/Javvanny/yolov8m_flying_objects_detection) (~52 Mo) | drone, avion, hélico, oiseau | **~3.6 fps** |
-| `drone` | [doguilmak Drone-YOLOv8x](https://github.com/doguilmak/Drone-Detection-YOLOv8x) (~130 Mo) | drone | ~1.4 fps |
+| `--model` | Modèle | Classes | Vitesse (Pi 5) |
+|-----------|--------|---------|----------------|
+| **`drone`** *(défaut)* | YOLO11n custom (~5,4 Mo, `training/train_drone.py`) | drone, bird, airplane | **~10-15 fps (NCNN)** |
 | `base` | yolov8n COCO (~6 Mo) | 80 classes | ~7 fps |
 
-- **`flying` est recommandé** : il détecte les drones (85 % en validation) **et** distingue
-  avion / hélicoptère / oiseau (utile en contre-UAS pour « savoir ce qui arrive »), tout en
-  étant ~2,7× plus rapide que le YOLOv8x. Ses labels d'origine (cyrillique) sont renommés via
-  `class_names` dans la config.
+- **Entraînement** : dataset [drone_bird_uav_aircraft (Roboflow, CC BY 4.0)](https://universe.roboflow.com/donia-mceky/drone_bird_uav_aircraft-pz6zp),
+  ~30 700 images, classe `uav` fusionnée dans `drone`. Les classes **bird/airplane sont des
+  distracteurs** : le modèle apprend à NE PAS confondre un oiseau ou un avion avec un drone
+  (la cause n°1 de faux positifs en contre-UAS). Workflow complet : `training/README.md`
+  (~1-2 h sur RTX 3090).
+- **NCNN sur le Pi** : `setup.sh` exporte automatiquement le `.pt` en NCNN
+  (`models/drone_yolo11n_ncnn_model/`), et le détecteur charge ce dossier en priorité —
+  ~2× plus rapide qu'ONNX sur ARM. En dev (Mac/Windows), le `.pt` est utilisé tel quel.
 - **Résolution d'inférence = 640** (et non 320). Les drones sont petits : downscaler les fait
   disparaître. Principe issu de [YOLO-Drone, MDPI 2023](https://www.mdpi.com/2079-9292/12/17/3664)
   (branche haute résolution pour cibles minuscules). Monter à 960/1280 aide les drones lointains.
-
-> ⚠️ **Performance** : même `flying` (~3.6 fps) n'est pas du temps réel fluide sur CPU. Pour le
-> Pi : exporter en **NCNN** (`yolo export model=models/flying_yolov8m.pt format=ncnn`) puis
-> pointer le `path` du modèle sur le dossier `_ncnn_model` — gros gain sur ARM.
 
 ---
 
@@ -55,14 +54,14 @@ téléchargés en local. On choisit avec `detection.model` ou `--model flying|dr
 
 ```
 capture ─▶ detect ──────▶ track ─▶ distance ─▶ overlay ─┬─▶ dashboard web (/  + /video, /events SSE)
- (PiCam/    (YOLOv8x drone)  (ByteTrack) (largeur)        └─▶ logs JSON (thread non-bloquant)
+ (PiCam/    (YOLO11n drone)  (ByteTrack) (largeur)        └─▶ logs JSON (thread non-bloquant)
   webcam)
 ```
 
 | Module | Rôle |
 |--------|------|
 | `camera/capture.py` | Capture PiCam (lazy) avec repli webcam (DSHOW sous Windows), frames BGR |
-| `detection/detector.py` | `ObjectDetector` : YOLOv8x drone, `detect()` (+ ByteTrack), filtrage classes |
+| `detection/detector.py` | `ObjectDetector` : YOLO (NCNN auto-détecté), `detect()` (+ ByteTrack), filtrage classes |
 | `detection/distance.py` | `DistanceEstimator` : distance monoculaire (largeur) caméra→objet |
 | `tracking/tracker.py` | `ObjectTracker` : IDs ByteTrack, trajectoires, durée de vie |
 | `output/overlay.py` | bboxes, labels (classe + distance), trajectoires, HUD |
@@ -96,7 +95,8 @@ bash setup.sh            # ou : bash setup.sh --service  (pour le service system
 ```
 
 Le script : vérifie l'OS, installe les paquets système, crée le venv, installe les
-dépendances Python, télécharge le **modèle drone** (`drone_yolov8x.pt`, ~130 Mo), crée `logs/` et `models/`.
+dépendances Python, vérifie la présence du **modèle drone** (`drone_yolo11n.pt`, cf.
+`training/README.md`) et l'**exporte en NCNN**, télécharge le modèle de base, crée `logs/` et `models/`.
 
 ### Sur PC de dev (Windows / Linux, webcam)
 
@@ -105,7 +105,7 @@ cd tracker
 python -m venv venv
 venv\Scripts\activate          # Windows  (Linux : source venv/bin/activate)
 pip install -r requirements.txt
-# (setup_dev.py télécharge le modèle drone dans models/drone_yolov8x.pt)
+# (le modèle drone custom est à copier dans models/drone_yolo11n.pt — cf. training/README.md)
 ```
 
 Dans `config.yaml`, mettre `camera.use_picamera: false` pour forcer la webcam (sinon le
@@ -122,7 +122,7 @@ python main.py
 # PC de dev (webcam)
 python main.py --config config.dev.yaml
 
-# Forcer un modèle : drone (précis, lent) ou base (rapide, généraliste)
+# Forcer un modèle : drone (anti-drone, défaut) ou base (COCO généraliste)
 python main.py --config config.dev.yaml --model base
 python main.py --config config.dev.yaml --model drone
 ```
@@ -142,7 +142,7 @@ Chaque module est testable indépendamment (depuis le dossier `tracker/`) :
 ```bash
 python -m utils.fps_counter
 python -m camera.capture
-python -m detection.detector    # YOLOv8x drone (nécessite ultralytics + le modèle)
+python -m detection.detector    # nécessite ultralytics + un modèle dans models/
 python -m detection.distance
 python -m tracking.tracker
 python -m output.overlay        # écrit overlay_test.png
@@ -158,11 +158,10 @@ Tout est centralisé : modèle + résolution d'inférence, seuils, classe priori
 tracking, estimation de distance (FOV + largeurs réelles + lissage) et sorties (tableau de
 bord, logs). Voir les commentaires dans le fichier.
 
-Leviers de performance (YOLOv8x est lourd) — **ne pas baisser `inference_size` sous 640**, ça
-détruit la détection des petits drones. Préférer :
-- **Exporter le modèle en NCNN/ONNX** : `yolo export model=models/drone_yolov8x.pt format=ncnn`
-  puis pointer `model_path` sur le résultat (gros gain sur Pi/CPU).
-- Un **modèle drone plus léger** (yolov8n/m fine-tuné) si disponible.
+Leviers de performance — **ne pas baisser `inference_size` sous 640**, ça détruit la
+détection des petits drones. Préférer :
+- **L'export NCNN** (fait automatiquement par `setup.sh` sur le Pi) : le détecteur charge
+  `models/drone_yolo11n_ncnn_model/` en priorité s'il existe — ~2× plus rapide sur ARM.
 - Baisser la **résolution caméra** (l'inférence reste à 640).
 
 ---
@@ -184,8 +183,8 @@ détruit la détection des petits drones. Préférer :
 |----------|------------------|
 | `picamera2 indisponible ... bascule sur webcam` | Normal sur PC. Sur Pi : `sudo apt install python3-picamera2` et venv `--system-site-packages`. |
 | `Aucune caméra disponible` | Vérifier le câble PiCam / index webcam (`camera.source`), `libcamera-hello` pour tester. |
-| Modèle non trouvé | Relancer `setup.sh`, ou télécharger `best.pt` (HuggingFace doguilmak) vers `models/drone_yolov8x.pt`. |
-| FPS très bas (~1 fps) | YOLOv8x est lourd. Exporter en NCNN/ONNX (`yolo export model=… format=ncnn`), modèle plus léger, ou baisser la résolution caméra. |
+| Modèle drone non trouvé | L'entraîner sur GPU (`training/README.md`) puis copier `drone_yolo11n.pt` dans `models/`. En attendant : `--model base`. |
+| FPS bas sur Pi | Vérifier que l'export NCNN existe (`models/drone_yolo11n_ncnn_model/`, relancer `setup.sh` sinon) ; baisser la résolution caméra. |
 | Drones lointains non détectés | Monter `detection.inference_size` (960/1280) — au prix du FPS (cf. § Détection de drones). |
 | Distances aberrantes | Ajuster `distance.hfov_deg` (FOV réel caméra) et `distance.known_widths_m` par classe. |
 | Page vide / image figée | Vérifier qu'un seul process tourne sur le port ; recharger `/`. |

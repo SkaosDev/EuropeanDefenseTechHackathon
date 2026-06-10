@@ -19,7 +19,7 @@ import time
 
 import cv2
 import numpy as np
-from flask import Flask, Response
+from flask import Flask, Response, request
 from loguru import logger
 
 # Page unique : vidéo à gauche, détections + journal à droite. Le JS écoute /events
@@ -47,11 +47,18 @@ _PAGE = """<!doctype html>
   #log div { white-space: nowrap; }
   .new { color: #3fb950; } .lost { color: #f85149; }
   .ts { color: #6e7681; }
+  button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
+           padding: 6px 12px; font: inherit; cursor: pointer; }
+  button:hover { background: #30363d; }
+  .focus-btns { display: flex; gap: 8px; margin-bottom: 8px; }
+  .focus-state { font-size: 13px; color: #8b949e; }
+  .focus-state b { color: #c9d1d9; font-weight: normal; }
 </style></head>
 <body>
   <div class="wrap">
     <div class="video"><img src="/video" alt="flux"></div>
     <div class="side">
+      <!--FOCUS_CARD-->
       <div class="card"><h2>Cibles suivies</h2>
         <table><thead><tr><th>ID</th><th>Classe</th><th>Conf.</th><th>Dist.</th></tr></thead>
         <tbody id="rows"></tbody></table>
@@ -90,16 +97,51 @@ function render(d) {
   }
 }
 
+// --- Optique (caméra C3 18X) : autofocus / focus manuel / zoom manuel à la demande.
+const FOCUS_STEP = __FOCUS_STEP__;
+const ZOOM_STEP = __ZOOM_STEP__;
+function af() { fetch("/focus/auto", { method: "POST" }); }
+function nudge(d) { fetch("/focus/nudge?delta=" + d, { method: "POST" }); }
+function zoom(d) { fetch("/zoom/nudge?delta=" + d, { method: "POST" }); }
+function dezoomMax() { fetch("/zoom/wide", { method: "POST" }); }
+const FOCUS_LABELS = { idle: "prêt", focusing: "mise au point…", done: "net", error: "erreur" };
+function renderFocus(f) {
+  const el = document.getElementById("focus-state");
+  if (!el || !f) return;
+  const st = FOCUS_LABELS[f.status] || f.status;
+  const pos = f.position == null ? "—" : f.position;
+  const net = (f.sharpness || 0).toFixed(0);
+  el.innerHTML = `état <b>${st}</b> · pos <b>${pos}</b> · net <b>${net}</b>`;
+}
+
 const es = new EventSource("/events");
-es.onmessage = e => render(JSON.parse(e.data));
+es.onmessage = e => { const d = JSON.parse(e.data); render(d); renderFocus(d.focus); };
 </script>
 </body></html>"""
+
+# Carte de contrôle du focus, insérée seulement quand une lentille motorisée
+# (C3 18X) est présente. Bouton autofocus one-shot + réglage manuel fin +/-.
+_FOCUS_CARD = """<div class="card"><h2>Optique (C3 18X)</h2>
+        <div class="focus-btns">
+          <button onclick="af()">Autofocus</button>
+          <button onclick="nudge(-FOCUS_STEP)">− net</button>
+          <button onclick="nudge(FOCUS_STEP)">+ net</button>
+        </div>
+        <div class="focus-btns">
+          <button onclick="zoom(ZOOM_STEP)">− dézoom</button>
+          <button onclick="zoom(-ZOOM_STEP)">+ zoom</button>
+          <button onclick="dezoomMax()">grand-angle max</button>
+        </div>
+        <div id="focus-state" class="focus-state">—</div>
+      </div>"""
 
 
 class Dashboard:
     """Sert le tableau de bord unique + le flux MJPEG + le flux SSE de données."""
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, on_autofocus=None, on_nudge=None,
+                 on_zoom=None, on_dezoom_max=None,
+                 focus_enabled: bool = False, focus_step: int = 50, zoom_step: int = 2000) -> None:
         self.host = config.get("mjpeg_host", "0.0.0.0")
         self.port = config.get("mjpeg_port", 5000)
         self._frame: bytes | None = None      # dernier JPEG encodé
@@ -108,10 +150,23 @@ class Dashboard:
         self._lock = threading.Lock()
         self._placeholder = self._make_placeholder()
 
+        # Contrôle de l'optique (caméra C3 18X). Callbacks branchés sur la caméra.
+        self._on_autofocus = on_autofocus
+        self._on_nudge = on_nudge
+        self._on_zoom = on_zoom
+        self._on_dezoom_max = on_dezoom_max
+        self._focus_enabled = focus_enabled
+        self._focus_step = int(focus_step)
+        self._zoom_step = int(zoom_step)
+
         self.app = Flask(__name__)
-        self.app.add_url_rule("/", "index", lambda: _PAGE)
+        self.app.add_url_rule("/", "index", self._index)
         self.app.add_url_rule("/video", "video", self._video)
         self.app.add_url_rule("/events", "events", self._events)
+        self.app.add_url_rule("/focus/auto", "focus_auto", self._focus_auto, methods=["POST"])
+        self.app.add_url_rule("/focus/nudge", "focus_nudge", self._focus_nudge, methods=["POST"])
+        self.app.add_url_rule("/zoom/nudge", "zoom_nudge", self._zoom_nudge, methods=["POST"])
+        self.app.add_url_rule("/zoom/wide", "zoom_wide", self._zoom_wide, methods=["POST"])
         self._thread: threading.Thread | None = None
 
     # -- API publique ------------------------------------------------------
@@ -137,6 +192,41 @@ class Dashboard:
 
     def _serve(self) -> None:
         self.app.run(host=self.host, port=self.port, threaded=True, use_reloader=False)
+
+    def _index(self) -> str:
+        """Page principale ; insère la carte Optique seulement si la C3 est pilotable."""
+        card = _FOCUS_CARD if self._focus_enabled else ""
+        return (_PAGE.replace("<!--FOCUS_CARD-->", card)
+                .replace("__FOCUS_STEP__", str(self._focus_step))
+                .replace("__ZOOM_STEP__", str(self._zoom_step)))
+
+    def _focus_auto(self):
+        """Déclenche un autofocus one-shot (non bloquant)."""
+        ok = bool(self._on_autofocus and self._on_autofocus())
+        return {"ok": ok}
+
+    def _focus_nudge(self):
+        """Ajuste le focus de ±delta pas (réglage manuel fin)."""
+        try:
+            delta = int(request.args.get("delta", self._focus_step))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "delta invalide"}, 400
+        ok = bool(self._on_nudge and self._on_nudge(delta))
+        return {"ok": ok}
+
+    def _zoom_nudge(self):
+        """Ajuste le zoom de ±delta pas (delta<0 = dézoome / grand-angle)."""
+        try:
+            delta = int(request.args.get("delta", self._zoom_step))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "delta invalide"}, 400
+        ok = bool(self._on_zoom and self._on_zoom(delta))
+        return {"ok": ok}
+
+    def _zoom_wide(self):
+        """Va au grand-angle maximum (bouton de secours)."""
+        ok = bool(self._on_dezoom_max and self._on_dezoom_max())
+        return {"ok": ok}
 
     def _video(self) -> Response:
         return Response(self._mjpeg_generator(),

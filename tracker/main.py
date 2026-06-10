@@ -49,6 +49,17 @@ def run(config: dict, model_name: str | None = None) -> None:
     if name not in det_cfg["models"]:
         raise ValueError(f"Modèle '{name}' inconnu (dispo : {list(det_cfg['models'])}).")
     mcfg = det_cfg["models"][name]
+    # Poids absents : message actionnable plutôt qu'un stack trace ultralytics.
+    # ("base" est exclu : yolov8n.pt est auto-téléchargé par ultralytics.)
+    weights = Path(mcfg["path"])
+    ncnn_dir = weights.with_name(weights.stem + "_ncnn_model")
+    if name != "base" and not weights.exists() and not ncnn_dir.is_dir():
+        raise SystemExit(
+            f"Poids absents pour le modèle '{name}' : {weights}\n"
+            "  1. Entraînez-le sur une machine GPU : voir training/README.md\n"
+            f"  2. Copiez le fichier obtenu vers {weights}\n"
+            "  En attendant : python main.py --model base"
+        )
     priority = mcfg.get("priority_class", "drone")
     # Config "à plat" attendue par ObjectDetector.
     flat_cfg = {
@@ -85,9 +96,19 @@ def run(config: dict, model_name: str | None = None) -> None:
     smooth = config.get("distance", {}).get("smoothing", 0.3)
     overlay = Overlay(out)
     det_logger = DetectionLogger(out)
-    dashboard = Dashboard(out)
+    # Contrôles de focus (caméra C3 18X) : boutons autofocus + réglage manuel,
+    # branchés sur la caméra. No-op / boutons masqués pour les autres sources.
+    dashboard = Dashboard(out, on_autofocus=cam.autofocus, on_nudge=cam.adjust_focus,
+                          on_zoom=cam.adjust_zoom, on_dezoom_max=cam.dezoom_max,
+                          focus_enabled=cam.focus_enabled, focus_step=cam.manual_step,
+                          zoom_step=cam.zoom_step)
     dashboard.start()
     fps = FPSCounter()
+
+    # Mise au point initiale (one-shot, non bloquante). Ensuite on n'y revient
+    # plus, sauf clic sur le bouton du dashboard.
+    if cam.focus_enabled and config["camera"].get("focus", {}).get("autofocus_on_start", True):
+        cam.autofocus()
 
     logger.info("Pipeline démarré (priorité={}).", priority)
     empty = 0
@@ -124,6 +145,7 @@ def run(config: dict, model_name: str | None = None) -> None:
                 "objects": [{"id": o.track_id, "class": o.detection.class_name,
                              "conf": round(o.detection.confidence, 3),
                              "distance": o.distance_m} for o in objects],
+                "focus": cam.focus_state(),
             })
             det_logger.log(objects, timestamp)
             fps.tick()
@@ -137,7 +159,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Détection & suivi de drones embarqué.")
     parser.add_argument("--config", default=str(Path(__file__).parent / "config.yaml"),
                         help="Chemin du fichier de configuration YAML.")
-    parser.add_argument("--model", choices=["flying", "drone", "base"], default=None,
+    parser.add_argument("--model", choices=["drone", "base"], default=None,
                         help="Modèle à utiliser (surcharge detection.model du config).")
     args = parser.parse_args()
 

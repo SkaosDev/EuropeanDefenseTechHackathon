@@ -1,0 +1,24 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Environnement virtuel ---
+venv/
+.venv/
+env/
+
+# --- Artefacts de diagnostic / sorties ---
+*.png
+*.mp4
+run.log
+
+# --- IDE / éditeurs ---
+.idea/
+.vscode/
+*.iml
+
+# --- OS ---
+.DS_Store
+Thumbs.db

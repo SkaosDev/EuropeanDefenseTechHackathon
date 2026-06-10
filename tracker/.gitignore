@@ -13,6 +13,12 @@ env/
 models/*.pt
 models/*.onnx
 models/*.engine
+models/*_ncnn_model/
+
+# --- Entraînement (dataset + runs lourds, re-générables) ---
+training/dataset/
+training/runs/
+training/*.pt
 
 # --- Logs générés ---
 logs/*.json

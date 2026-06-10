@@ -7,9 +7,10 @@
 #   -> Pour utiliser l'affichage local cv2.imshow (output.display: true),
 #      remplacer par "opencv-contrib-python" (fenêtre + trackers CSRT legacy).
 
-ultralytics>=8.3.0
+ultralytics>=8.4.0          # YOLO11/YOLO26 + export NCNN (8.4.63 au 2026-06)
 opencv-python-headless>=4.10.0
 flask>=3.0.0
 numpy>=1.26.0
 pyyaml>=6.0
 loguru>=0.7.0
+pyserial>=3.5             # contrôleur de focus SCF4 de la caméra C3 18X (camera.type: c3)

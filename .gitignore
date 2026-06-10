@@ -1,2 +1,36 @@
-.claude
-.idea
+# ============================================================================
+#  .gitignore racine — règles communes à tout le dépôt.
+#  Les sous-projets (tracker/, test_kurokesu/) ont leurs propres .gitignore
+#  pour les artefacts spécifiques (modèles, datasets, logs...).
+# ============================================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Environnements virtuels ---
+venv/
+.venv/
+env/
+ENV/
+
+# --- IDE / éditeurs ---
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# --- Outils / agents ---
+.claude/
+
+# --- OS ---
+.DS_Store
+Thumbs.db

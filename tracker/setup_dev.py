@@ -17,16 +17,12 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 VENV = HERE / "venv"
 MODELS = HERE / "models"
-MODEL = MODELS / "drone_yolov8x.pt"
-MODEL_URL = "https://huggingface.co/doguilmak/Drone-Detection-YOLOv8x/resolve/main/weight/best.pt"
-FLYING_MODEL = MODELS / "flying_yolov8m.pt"
-FLYING_URL = "https://huggingface.co/Javvanny/yolov8m_flying_objects_detection/resolve/main/yolov8m/weights/best.pt"
+DRONE_MODEL = MODELS / "drone_yolo11n.pt"   # entraîné via training/train_drone.py (GPU)
 BASE_MODEL = MODELS / "yolov8n.pt"
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -64,21 +60,14 @@ def main() -> None:
     MODELS.mkdir(exist_ok=True)
     (HERE / "logs").mkdir(exist_ok=True)
 
-    # 4. Modèles (tous en local : flying + drone + base)
-    def _download(label, dest, url, size):
-        if dest.exists():
-            print(f"==> Modèle {label} déjà présent : {dest}")
-            return
-        print(f"==> Téléchargement du modèle {label} ({size})...")
-        try:
-            urllib.request.urlretrieve(url, dest)
-            print(f"    OK -> {dest}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"!! Téléchargement {label} échoué ({exc}). À récupérer manuellement :")
-            print(f"   {url}  ->  {dest}")
-
-    _download("flying (yolov8m, recommandé)", FLYING_MODEL, FLYING_URL, "~52 Mo")
-    _download("drone (yolov8x)", MODEL, MODEL_URL, "~130 Mo")
+    # 4. Modèles (drone custom + base)
+    if DRONE_MODEL.exists():
+        print(f"==> Modèle drone présent : {DRONE_MODEL}")
+    else:
+        print(f"!! Modèle drone absent : {DRONE_MODEL}")
+        print("   Entraînez-le sur une machine GPU (cf. training/README.md) puis copiez")
+        print("   drone_yolo11n.pt dans models/.")
+        print("   En attendant : python main.py --config config.dev.yaml --model base")
     if BASE_MODEL.exists():
         print(f"==> Modèle de base déjà présent : {BASE_MODEL}")
     else:

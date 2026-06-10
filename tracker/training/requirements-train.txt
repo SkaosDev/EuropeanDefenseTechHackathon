@@ -1,0 +1,6 @@
+# Dépendances pour l'entraînement (machine GPU, pas le Pi).
+# Installer une build CUDA de torch si pip n'en choisit pas une automatiquement :
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+ultralytics>=8.4.0
+roboflow>=1.1.0
+pyyaml>=6.0

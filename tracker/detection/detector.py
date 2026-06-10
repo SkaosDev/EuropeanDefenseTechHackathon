@@ -1,16 +1,31 @@
-"""Wrapper YOLOv8n : chargement + suivi ByteTrack intégré.
+"""Wrapper YOLO : chargement + suivi ByteTrack intégré.
 
 Le modèle est chargé une fois puis réchauffé. `track()` renvoie les détections filtrées
 (classes cibles) avec identifiants persistants — ByteTrack est géré par ultralytics.
+
+Si un export NCNN existe à côté du .pt (dossier `<nom>_ncnn_model`, généré par setup.sh
+sur le Pi), il est chargé en priorité : ~2x plus rapide qu'ONNX sur ARM.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
 from loguru import logger
 from ultralytics import YOLO
 
 from common.types import Detection
+
+
+def _resolve_model_path(path: str) -> str:
+    """Préfère l'export NCNN frère (`<nom>_ncnn_model/`) au .pt s'il existe."""
+    pt = Path(path)
+    ncnn_dir = pt.with_name(pt.stem + "_ncnn_model")
+    if pt.suffix == ".pt" and ncnn_dir.is_dir():
+        logger.info("Export NCNN détecté : {} (backend ARM optimisé)", ncnn_dir)
+        return str(ncnn_dir)
+    return path
 
 
 class ObjectDetector:
@@ -26,8 +41,9 @@ class ObjectDetector:
         # Renommage d'affichage optionnel (ex. "Drone" -> "drone").
         self.class_aliases: dict[str, str] = config.get("class_aliases", {})
 
-        logger.info("Chargement du modèle YOLO : {}", config["model_path"])
-        self.model = YOLO(config["model_path"])
+        model_path = _resolve_model_path(config["model_path"])
+        logger.info("Chargement du modèle YOLO : {}", model_path)
+        self.model = YOLO(model_path)
         # Renommage des classes par INDEX (utile si le modèle a des labels exotiques,
         # ex. classes en cyrillique) : class_names = ["drone","avion",...].
         override = config.get("class_names")

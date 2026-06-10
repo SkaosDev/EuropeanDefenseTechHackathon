@@ -9,10 +9,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$HERE/venv"
 PY="$VENV/bin/python"
-MODEL="$HERE/models/drone_yolov8x.pt"
-MODEL_URL="https://huggingface.co/doguilmak/Drone-Detection-YOLOv8x/resolve/main/weight/best.pt"
-FLYING_MODEL="$HERE/models/flying_yolov8m.pt"
-FLYING_URL="https://huggingface.co/Javvanny/yolov8m_flying_objects_detection/resolve/main/yolov8m/weights/best.pt"
+DRONE_MODEL="$HERE/models/drone_yolo11n.pt"     # entraîné via training/train_drone.py (GPU)
+NCNN_DIR="$HERE/models/drone_yolo11n_ncnn_model"
 BASE_MODEL="$HERE/models/yolov8n.pt"
 MAKE_SERVICE=0
 [[ "${1:-}" == "--service" ]] && MAKE_SERVICE=1
@@ -48,26 +46,25 @@ echo "==> Installation des dépendances Python..."
 "$PY" -m pip install --upgrade pip
 "$PY" -m pip install -r "$HERE/requirements.txt"
 
-# --- 5. Modèles (tous en local : flying + drone + base) ---------------------
+# --- 5. Modèles (drone custom + base) ----------------------------------------
 mkdir -p "$HERE/models" "$HERE/logs"
-# 5a0. Modèle flying YOLOv8m (~52 Mo, recommandé : rapide + détecte drones)
-if [[ -f "$FLYING_MODEL" ]]; then
-  echo "==> Modèle flying déjà présent : $FLYING_MODEL"
+# 5a. Modèle drone YOLO11n custom (entraîné sur GPU, cf. training/README.md)
+if [[ -f "$DRONE_MODEL" ]]; then
+  echo "==> Modèle drone présent : $DRONE_MODEL"
+  # Export NCNN (~2x plus rapide qu'ONNX sur ARM) — chargé en priorité par le détecteur.
+  if [[ -d "$NCNN_DIR" ]]; then
+    echo "==> Export NCNN déjà présent : $NCNN_DIR"
+  else
+    echo "==> Export NCNN du modèle drone (quelques minutes sur Pi)..."
+    "$PY" -m pip install ncnn
+    "$PY" -c "from ultralytics import YOLO; YOLO('$DRONE_MODEL').export(format='ncnn', imgsz=640)" || \
+      echo "!! Export NCNN échoué — le tracker utilisera le .pt (plus lent)."
+  fi
 else
-  echo "==> Téléchargement du modèle flying YOLOv8m (~52 Mo)..."
-  wget -q --show-progress -O "$FLYING_MODEL" "$FLYING_URL" || \
-    curl -fL -o "$FLYING_MODEL" "$FLYING_URL" || \
-    echo "!! Échec du téléchargement flying : $FLYING_URL"
-fi
-# 5a. Modèle drone YOLOv8x (~130 Mo)
-if [[ -f "$MODEL" ]]; then
-  echo "==> Modèle drone déjà présent : $MODEL"
-else
-  echo "==> Téléchargement du modèle drone YOLOv8x (~130 Mo) depuis HuggingFace..."
-  wget -q --show-progress -O "$MODEL" "$MODEL_URL" || \
-    curl -fL -o "$MODEL" "$MODEL_URL" || {
-      echo "!! Échec du téléchargement drone. Récupérez best.pt manuellement :"
-      echo "   $MODEL_URL  ->  $MODEL"; }
+  echo "!! Modèle drone absent : $DRONE_MODEL"
+  echo "   Entraînez-le sur une machine GPU (cf. training/README.md) puis copiez"
+  echo "   drone_yolo11n.pt dans models/ et relancez setup.sh pour l'export NCNN."
+  echo "   En attendant : python main.py --model base"
 fi
 # 5b. Modèle de base YOLOv8n COCO (~6 Mo, rapide)
 if [[ -f "$BASE_MODEL" ]]; then

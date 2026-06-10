@@ -5,32 +5,51 @@
 # ============================================================================
 
 camera:
-  use_picamera: false         # PC de dev : webcam OpenCV (pas de libcamera)
-  source: 0                   # index de la webcam (0 = par défaut ; essayer 1 si besoin)
-  resolution: [640, 480]
+  type: c3                # picamera | webcam | c3   (mettre "c3" si la Kurokesu C3 18X est branchée)
+  use_picamera: false         # rétro-compat si 'type' absent : PC de dev = webcam OpenCV
+  source: 0                   # index de la webcam / C3 18X (0 = par défaut ; essayer 1 si besoin)
+  resolution: [640, 480]      # pour la C3, plutôt [1280, 720]
   fps: 30
   format: "RGB888"            # ignoré en mode webcam
 
+  # Zoom + focus motorisés de la C3 18X (utilisés uniquement si type == c3).
+  zoom:
+    dezoom_on_start: true     # au lancement : homing axe A + déplacement vers le grand-angle max
+    axis: A
+    wide_position: 0          # position grand-angle ; si ça part au téléobjectif, mettre 64000
+    min: 0                    # bornes de la course zoom (boutons manuels du dashboard)
+    max: 64000
+    manual_step: 2000         # pas des boutons − dézoom / + zoom
+  focus:
+    port: auto
+    home_on_start: true
+    autofocus_on_start: true
+    focus_min: 2000
+    focus_max: 15000
+    coarse_step: 300
+    fine_step: 30
+    fine_window: 400
+    speed: 600
+    backlash_steps: 20
+    approach_dir: 1
+    early_stop_ratio: 0.30
+    roi_ratio: 0.40
+    manual_step: 50
+    settle_sec: 0.15
+
 detection:
-  # flying (rapide+précis, recommandé) | drone (x, lourd) | base (COCO, rapide, sans drone)
+  # drone (YOLO11n custom : drone/bird/airplane) | base (COCO, rapide, sans drone)
   # Override : python main.py --config config.dev.yaml --model base
-  model: "flying"
+  model: "drone"
   device: "cpu"
   iou_threshold: 0.5
 
   models:
-    flying:
-      path: "models/flying_yolov8m.pt"
-      classes: []
-      class_names: ["drone", "avion", "helico", "oiseau", "drone"]
-      priority_class: "drone"
-      confidence: 0.25
-      inference_size: 640
     drone:
-      path: "models/drone_yolov8x.pt"
-      classes: ["drone"]
+      path: "models/drone_yolo11n.pt"   # produit par training/train_drone.py (GPU)
+      classes: []                 # drone, bird, airplane — bird/airplane = anti-faux-positifs
       priority_class: "drone"
-      confidence: 0.25
+      confidence: 0.30
       inference_size: 640         # ne pas baisser sous 640 (petits drones)
     base:
       path: "models/yolov8n.pt"
@@ -59,7 +78,7 @@ output:
   display: false              # true = fenêtre OpenCV locale (nécessite opencv-contrib-python)
   mjpeg_stream: true          # priorité : flux navigateur, marche partout
   mjpeg_host: "127.0.0.1"     # dev local uniquement (mettre 0.0.0.0 pour exposer sur le réseau)
-  mjpeg_port: 5000
+  mjpeg_port: 5173
   log_path: "logs/detections.json"
   log_rotation_mb: 10
   draw_trajectory: true
