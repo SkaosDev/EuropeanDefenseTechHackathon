@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 
@@ -53,11 +54,20 @@ _PAGE = """<!doctype html>
   .focus-btns { display: flex; gap: 8px; margin-bottom: 8px; }
   .focus-state { font-size: 13px; color: #8b949e; }
   .focus-state b { color: #c9d1d9; font-weight: normal; }
+  #scene3d { width: 100%; height: 340px; border-radius: 4px; overflow: hidden;
+             background: #0d1117; cursor: grab; }
+  #scene3d:active { cursor: grabbing; }
+  #scene3d canvas { display: block; }
+  .hint { font-size: 11px; color: #6e7681; margin-top: 6px; }
 </style></head>
 <body>
   <div class="wrap">
     <div class="video"><img src="/video" alt="flux"></div>
     <div class="side">
+      <div class="card"><h2>Vue 3D</h2>
+        <div id="scene3d"></div>
+        <div class="hint">caméra au centre (cône) · cibles placées par distance + FOV · souris : pivoter / molette : zoom</div>
+      </div>
       <!--FOCUS_CARD-->
       <div class="card"><h2>Cibles suivies</h2>
         <table><thead><tr><th>ID</th><th>Classe</th><th>Conf.</th><th>Dist.</th></tr></thead>
@@ -66,6 +76,8 @@ _PAGE = """<!doctype html>
       <div class="card"><h2>Journal</h2><div id="log"></div></div>
     </div>
   </div>
+<script src="/static/three.min.js"></script>
+<script src="/static/OrbitControls.js"></script>
 <script>
 const colorFor = cls => cls.toLowerCase() === "drone" ? "#ff0000" : "#00ff00";  // drone = priorité
 let known = new Map();           // id -> classe, pour détecter apparitions/disparitions
@@ -114,8 +126,144 @@ function renderFocus(f) {
   el.innerHTML = `état <b>${st}</b> · pos <b>${pos}</b> · net <b>${net}</b>`;
 }
 
+// --- Vue 3D (Three.js) : caméra système au centre (cône) + cône de champ (FOV),
+// cibles placées par projection sténopé (centre du bbox + distance + focale).
+// Repère monde : +X droite, +Y haut, +Z = axe optique (devant la caméra). 1 unité = 1 m.
+let scene3d, cam3d, renderer3d, controls3d, fovGroup;
+let camKey = "";                       // (W,H,HFOV) courant, pour ne reconstruire le FOV qu'au besoin
+const meshes = new Map();              // id -> THREE.Mesh (sphère cible)
+
+function init3D() {
+  const host = document.getElementById("scene3d");
+  if (!host || typeof THREE === "undefined") return;     // three.js absent -> on n'active pas la 3D
+  try {
+    scene3d = new THREE.Scene();
+    scene3d.background = new THREE.Color(0x0d1117);
+
+    cam3d = new THREE.PerspectiveCamera(55, host.clientWidth / host.clientHeight, 0.1, 4000);
+    cam3d.position.set(0, 16, -28);                       // recule + au-dessus, regarde vers +Z
+
+    renderer3d = new THREE.WebGLRenderer({ antialias: true });
+    renderer3d.setPixelRatio(window.devicePixelRatio || 1);
+    renderer3d.setSize(host.clientWidth, host.clientHeight);
+    host.appendChild(renderer3d.domElement);
+
+    controls3d = new THREE.OrbitControls(cam3d, renderer3d.domElement);
+    controls3d.target.set(0, 0, 12);
+    controls3d.update();
+
+    scene3d.add(new THREE.AmbientLight(0xffffff, 0.75));
+    const dl = new THREE.DirectionalLight(0xffffff, 0.6); dl.position.set(10, 20, 6); scene3d.add(dl);
+    const grid = new THREE.GridHelper(160, 32, 0x30363d, 0x1c2128);
+    scene3d.add(grid);                                    // sol = plan XZ
+    scene3d.add(new THREE.AxesHelper(4));
+
+    // Caméra système : cône bleu pointant vers +Z (axe optique), orientation fixe.
+    const coneGeo = new THREE.ConeGeometry(2, 5, 28);
+    coneGeo.rotateX(Math.PI / 2);                         // apex vers +Z
+    coneGeo.translate(0, 0, 2.5);
+    const cone = new THREE.Mesh(coneGeo,
+      new THREE.MeshStandardMaterial({ color: 0x58a6ff }));
+    scene3d.add(cone);
+
+    fovGroup = new THREE.Group(); scene3d.add(fovGroup);  // frustum de champ, construit au 1er paquet
+    window.addEventListener("resize", resize3D);
+    animate3D();
+  } catch (err) { scene3d = null; console.warn("Vue 3D indisponible :", err); }
+}
+
+// Frustum filaire représentant le champ de vision, reconstruit seulement si W/H/HFOV change.
+function buildFrustum(W, H, hfovDeg) {
+  const key = W + "x" + H + "@" + hfovDeg;
+  if (key === camKey || !fovGroup) return;
+  camKey = key;
+  while (fovGroup.children.length) {
+    const c = fovGroup.children[0]; fovGroup.remove(c); c.geometry.dispose(); c.material.dispose();
+  }
+  const focal = (W / 2) / Math.tan(hfovDeg * Math.PI / 180 / 2);
+  const D = 18;                                           // profondeur d'affichage du plan image (m)
+  const hw = D * (W / 2) / focal, hh = D * (H / 2) / focal;
+  const O = new THREE.Vector3(0, 0, 0);
+  const c = [new THREE.Vector3(-hw, hh, D), new THREE.Vector3(hw, hh, D),
+             new THREE.Vector3(hw, -hh, D), new THREE.Vector3(-hw, -hh, D)];
+  const pts = [O, c[0], O, c[1], O, c[2], O, c[3],
+               c[0], c[1], c[1], c[2], c[2], c[3], c[3], c[0]];
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  fovGroup.add(new THREE.LineSegments(geo,
+    new THREE.LineBasicMaterial({ color: 0x58a6ff, transparent: true, opacity: 0.45 })));
+}
+
+// Étiquette texte (sprite) accrochée à une cible ; régénérée seulement si le texte change.
+function makeLabel(text) {
+  const cv = document.createElement("canvas"), ctx = cv.getContext("2d");
+  ctx.font = "26px monospace";
+  cv.width = Math.ceil(ctx.measureText(text).width) + 16; cv.height = 34;
+  ctx.font = "26px monospace";
+  ctx.fillStyle = "rgba(13,17,23,0.78)"; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = "#fff"; ctx.textBaseline = "middle"; ctx.fillText(text, 8, cv.height / 2);
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial(
+    { map: new THREE.CanvasTexture(cv), depthTest: false }));
+  spr.scale.set(cv.width / 34 * 1.6, 1.6, 1); spr.position.set(0, 1.8, 0);
+  return spr;
+}
+
+function render3D(d) {
+  if (!scene3d || !d.cam) return;
+  const W = d.cam.w, H = d.cam.h, hfov = d.cam.hfov_deg;
+  buildFrustum(W, H, hfov);
+  const focal = (W / 2) / Math.tan(hfov * Math.PI / 180 / 2);
+  const seen = new Set();
+  for (const o of d.objects) {
+    if (o.distance == null || !o.bbox) continue;          // sans distance/bbox : pas de position 3D
+    seen.add(o.id);
+    const cx = (o.bbox[0] + o.bbox[2]) / 2, cy = (o.bbox[1] + o.bbox[3]) / 2;
+    const u = (cx - W / 2) / focal, v = (cy - H / 2) / focal;
+    // La caméra de visualisation regarde +Z depuis l'arrière du cône : son axe
+    // "droite écran" est -X monde. On prend donc -u (sinon un objet à droite de
+    // l'image s'afficherait à gauche). -v : haut de l'image -> +Y (haut écran), OK.
+    const pos = new THREE.Vector3(-u, -v, 1).normalize().multiplyScalar(o.distance);
+    let m = meshes.get(o.id);
+    if (!m) {
+      m = new THREE.Mesh(new THREE.SphereGeometry(0.9, 16, 16),
+        new THREE.MeshStandardMaterial({ color: colorFor(o.class) }));
+      scene3d.add(m); meshes.set(o.id, m);
+    }
+    m.material.color.set(colorFor(o.class));
+    m.position.copy(pos);
+    const txt = "#" + o.id + " " + o.class + " " + o.distance.toFixed(0) + "m";
+    if (m.userData.txt !== txt) {
+      if (m.userData.label) {
+        m.remove(m.userData.label);
+        m.userData.label.material.map.dispose(); m.userData.label.material.dispose();
+      }
+      const lbl = makeLabel(txt); m.add(lbl); m.userData.label = lbl; m.userData.txt = txt;
+    }
+  }
+  for (const [id, m] of [...meshes]) {                     // retire les cibles disparues
+    if (!seen.has(id)) {
+      scene3d.remove(m); m.geometry.dispose(); m.material.dispose();
+      if (m.userData.label) { m.userData.label.material.map.dispose(); m.userData.label.material.dispose(); }
+      meshes.delete(id);
+    }
+  }
+}
+
+function animate3D() {
+  requestAnimationFrame(animate3D);
+  controls3d.update();
+  renderer3d.render(scene3d, cam3d);
+}
+function resize3D() {
+  const host = document.getElementById("scene3d");
+  if (!scene3d || !host.clientWidth) return;
+  cam3d.aspect = host.clientWidth / host.clientHeight; cam3d.updateProjectionMatrix();
+  renderer3d.setSize(host.clientWidth, host.clientHeight);
+}
+
+init3D();
+
 const es = new EventSource("/events");
-es.onmessage = e => { const d = JSON.parse(e.data); render(d); renderFocus(d.focus); };
+es.onmessage = e => { const d = JSON.parse(e.data); render(d); renderFocus(d.focus); render3D(d); };
 </script>
 </body></html>"""
 
@@ -146,7 +294,7 @@ class Dashboard:
         self.port = config.get("mjpeg_port", 5000)
         self._frame: bytes | None = None      # dernier JPEG encodé
         self._seq = 0                          # incrémenté à chaque nouvelle frame
-        self._data: dict = {"fps": 0.0, "timestamp": "", "objects": []}
+        self._data: dict = {"fps": 0.0, "timestamp": "", "objects": [], "cam": None}
         self._lock = threading.Lock()
         self._placeholder = self._make_placeholder()
 
@@ -159,7 +307,10 @@ class Dashboard:
         self._focus_step = int(focus_step)
         self._zoom_step = int(zoom_step)
 
-        self.app = Flask(__name__)
+        # static_folder absolu (output/static/) : sert three.min.js + OrbitControls.js
+        # vendorés → la vue 3D marche hors-ligne, quel que soit le dossier de lancement.
+        static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+        self.app = Flask(__name__, static_folder=static_dir, static_url_path="/static")
         self.app.add_url_rule("/", "index", self._index)
         self.app.add_url_rule("/video", "video", self._video)
         self.app.add_url_rule("/events", "events", self._events)
@@ -280,6 +431,7 @@ if __name__ == "__main__":
         img = np.zeros((480, 640, 3), dtype=np.uint8)
         cv2.circle(img, (x % 640, 240), 30, (0, 255, 0), -1)
         server.update(img, {"fps": 30.0, "timestamp": "demo",
+                            "cam": {"w": 640, "h": 480, "hfov_deg": 66.0},
                             "objects": [{"id": 1, "class": "drone", "conf": 0.9, "distance": 12.0,
                                          "bbox": [x % 640 - 30, 210, x % 640 + 30, 270]}]})
         x += 8

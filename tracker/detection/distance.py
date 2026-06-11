@@ -24,7 +24,8 @@ class DistanceEstimator:
 
     def __init__(self, config: dict, frame_width: int) -> None:
         self.enable = config.get("enable", True)
-        hfov = math.radians(config.get("hfov_deg", 66.0))
+        self.hfov_deg = config.get("hfov_deg", 66.0)  # réutilisé par la vue 3D du dashboard
+        hfov = math.radians(self.hfov_deg)
         # Focale en pixels déduite du champ de vision horizontal et de la largeur image.
         self.focal_px = (frame_width / 2.0) / math.tan(hfov / 2.0)
         self.known_widths = config.get("known_widths_m", {})

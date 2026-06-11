@@ -35,6 +35,32 @@ Options utiles : `--epochs 50` (plus rapide, un peu moins bon — recommandé su
 rapide sur Pi si votre version d'ultralytics le propose), `--device 0|mps|cpu`
 (forcer le device au lieu de l'auto-détection).
 
+## Mode Mac Apple Silicon (M1/M2/M3) optimisé
+
+Le script détecte automatiquement le Mac et **sature le matériel** sans rien régler :
+GPU via **MPS**, **tous les cœurs CPU** pour le data-loading, demi-précision (AMP),
+et exploitation de la mémoire unifiée (batch 32 sur 24 Go). Objectif : **~1 s/it**.
+
+```bash
+python train_drone.py                 # auto : MPS + batch 32 + workers 8 + AMP
+python train_drone.py --fast          # plus rapide : batch 48 + imgsz 512
+python train_drone.py --fraction 0.3  # itère vite sur 30% du dataset (test setup)
+```
+
+À savoir (réalité technique, pas une limite du script) :
+
+- **La puce neuronale (ANE) ne sert PAS à l'entraînement.** Elle n'est accessible
+  qu'en *inférence* via CoreML. PyTorch/MPS l'ignore. Aucun framework d'entraînement
+  ne peut l'utiliser. On maximise donc **GPU (MPS) + CPU (dataloader)**, pas l'ANE.
+- **`cache ram` est volontairement évité** : ~30k images décodées dépassent 24 Go et
+  **gèleraient le Mac**. Le cache disque décode une fois puis relit sans re-décoder.
+- **~1 s/it ≠ entraînement court.** À 1 s/it, batch 32, ~21k images train ≈ **11 min/epoch**.
+  Donc **100 epochs ≈ 18 h** même au max. Pour un modèle utilisable vite sur Mac :
+  `--epochs 50 --fast` (l'early-stopping coupe souvent avant), ou `--fraction 0.5`
+  pour un premier jet, puis relancer en plein dataset.
+- **Si gel/OOM** : baisse `--batch` (ex. `--batch 24`). Ferme les apps lourdes
+  (navigateur) — la RAM est partagée entre le GPU et le système.
+
 Le script est **idempotent** : en cas d'interruption, relancer reprend le dataset
 déjà téléchargé et le même dossier de runs.
 

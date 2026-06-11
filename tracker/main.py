@@ -139,12 +139,17 @@ def run(config: dict, model_name: str | None = None) -> None:
 
             timestamp = datetime.now().isoformat(timespec="seconds")
             overlay.draw(frame, objects, fps.fps, timestamp, priority)
+            h, w = frame.shape[:2]
             dashboard.update(frame, {
                 "fps": round(fps.fps, 1),
                 "timestamp": timestamp.split("T")[-1],
+                # bbox + intrinsèques caméra : la vue 3D du dashboard projette chaque cible
+                # à sa distance estimée, à l'azimut/élévation déduits du centre du bbox et du FOV.
+                "cam": {"w": w, "h": h, "hfov_deg": distance.hfov_deg},
                 "objects": [{"id": o.track_id, "class": o.detection.class_name,
                              "conf": round(o.detection.confidence, 3),
-                             "distance": o.distance_m} for o in objects],
+                             "distance": o.distance_m,
+                             "bbox": list(o.detection.bbox)} for o in objects],
                 "focus": cam.focus_state(),
             })
             det_logger.log(objects, timestamp)

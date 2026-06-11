@@ -83,16 +83,7 @@ class LensController:
         # Zoom AVANT le focus : changer le zoom modifie la mise au point, donc on
         # dézoome d'abord, puis on home/autofocus le focus sur le champ final.
         if self.dezoom_on_start:
-            logger.info("Zoom : homing axe {} puis grand-angle (pos={})...",
-                        self.zoom_axis, self.zoom_wide_position)
-            self.dev.home_axis(self.zoom_axis)        # référence au PI (côté téléobjectif)
-            self.dev.move_abs(self.zoom_axis, self.zoom_wide_position, wait=False)
-            try:
-                # course longue : timeout généreux ; si la butée est atteinte avant la
-                # consigne, le moteur cale (open-loop) -> on considère le grand-angle atteint.
-                self.dev.wait_stop(self.zoom_axis, timeout=60)
-            except TimeoutError:
-                logger.warning("Zoom : fin de course non confirmée (timeout) — supposé grand-angle.")
+            self._drive_to_wide_stop()
         if self.home_on_start:
             logger.info("Focus C3 : homing de l'axe B...")
             self.dev.home_axis("B")
@@ -106,6 +97,36 @@ class LensController:
         self._set_state(status="idle", position=self._position)
         logger.info("Focus C3 prêt (plage {}..{}, zoom={}).",
                     self.focus_min, self.focus_max, self._zoom_position)
+
+    def _drive_to_wide_stop(self) -> None:
+        """Pousse le zoom jusqu'à sa butée mécanique grand-angle (dézoom max).
+
+        On ne se fie PAS au homing (non répétable sur ce SCF4) ni à une position
+        absolue : on commande un déplacement RELATIF plus long que toute la course,
+        dans le sens du grand-angle (déduit de `wide_position`). Le moteur, en
+        boucle ouverte, cale sur la butée physique — référence répétable du « plus
+        grand champ possible ». On y fixe ensuite l'origine (`G92` = `wide_position`)
+        pour que les boutons de zoom manuels repartent d'un zéro connu.
+        """
+        axis = self.zoom_axis
+        midpoint = (self.zoom_min + self.zoom_max) / 2
+        # Sens physique vers le grand-angle : côté de `wide_position` (configurable).
+        sign = 1 if self.zoom_wide_position >= midpoint else -1
+        overtravel = sign * (int((self.zoom_max - self.zoom_min) * 1.2) + 1000)
+        logger.info("Zoom : dézoom max — course relative {:+d} (axe {}) jusqu'à la butée...",
+                    overtravel, axis)
+        self.dev.set_speed(axis, self.speed)
+        self.dev.send("G91")                                   # mode relatif
+        self.dev.send(f"G0 {axis}{overtravel:+d}")             # course longue -> butée mécanique
+        try:
+            self.dev.wait_stop(axis, timeout=90)
+        except TimeoutError:
+            logger.warning("Zoom : butée non confirmée (timeout) — supposé grand-angle.")
+        self.dev.send("G90")                                   # retour en absolu
+        self.dev.send(f"G92 {axis}{self.zoom_wide_position}")  # la butée devient wide_position
+        self._zoom_position = self.zoom_wide_position
+        logger.info("Zoom : butée grand-angle atteinte (origine fixée à {}).",
+                    self.zoom_wide_position)
 
     def close(self) -> None:
         self._stop.set()

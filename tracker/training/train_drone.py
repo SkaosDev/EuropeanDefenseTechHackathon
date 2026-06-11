@@ -32,6 +32,22 @@ from pathlib import Path
 
 import yaml
 
+
+def configure_apple_silicon() -> bool:
+    """Règle l'environnement MPS AVANT tout import de torch (sinon ignoré).
+
+    Renvoie True si on tourne sur un Mac Apple Silicon. Ne touche à rien ailleurs.
+    Rappel : la puce neuronale (ANE) n'est PAS utilisable pour l'entraînement
+    (CoreML/inférence seulement). On maximise donc GPU (MPS) + CPU (dataloader).
+    """
+    if sys.platform != "darwin":
+        return False
+    # Les ops non implémentées en MPS retombent sur le CPU au lieu de crasher.
+    os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    # Threads CPU pour le décodage/redimensionnement des images (data-loading).
+    os.environ.setdefault("OMP_NUM_THREADS", str(os.cpu_count() or 8))
+    return True
+
 HERE = Path(__file__).resolve().parent
 DATASET_DIR = HERE / "dataset"
 OUTPUT_WEIGHTS = HERE / "drone_yolo11n.pt"
@@ -143,31 +159,65 @@ def resolve_device(requested: str) -> str:
         print(f"==> Device : CUDA ({torch.cuda.get_device_name(0)})")
         return "0"
     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-        print("==> Device : MPS (Apple Silicon) — comptez plusieurs heures.")
-        print("    Astuce : --epochs 50 pour un premier modèle utilisable plus vite.")
+        print("==> Device : MPS (GPU Apple Silicon) — mode Mac optimisé activé.")
         return "mps"
     print("==> Device : CPU — TRÈS lent (~plusieurs jours). GPU fortement conseillé.")
     return "cpu"
+
+
+def resolve_mac_settings(args: argparse.Namespace) -> dict:
+    """Réglages saturant un Mac Apple Silicon (M-series) en MPS.
+
+    Objectif : ~1 s/it en exploitant le GPU + les cœurs CPU + la mémoire unifiée.
+      - batch : 32 par défaut (≈8-10 Go sur 24 Go) ; --fast pousse à 48.
+      - workers : tous les cœurs CPU pour que le dataloader ne bride jamais le GPU.
+      - cache : 'disk' par défaut (sûr) ; 'ram' interdit ici car ~30k images
+        décodées > 24 Go -> gèlerait le Mac. Forçable via --cache ram à tes risques.
+    """
+    cpu = os.cpu_count() or 8
+    workers = args.workers if args.workers and args.workers > 0 else cpu
+    batch = args.batch
+    if batch == -1:  # -1 = auto : l'auto-batch VRAM d'ultralytics est CUDA-only
+        batch = 48 if args.fast else 32
+    imgsz = args.imgsz
+    if args.fast and imgsz == 640:
+        # 512px : ~1.5x plus rapide. Compromis : drones très lointains plus durs
+        # à voir. Garde 640 si la portée max compte plus que la vitesse.
+        imgsz = 512
+        print("    --fast : imgsz 640 -> 512 (plus rapide, un peu moins de portée).")
+    return {"batch": batch, "workers": workers, "imgsz": imgsz}
 
 
 def train(ds_root: Path, args: argparse.Namespace) -> None:
     from ultralytics import YOLO
 
     device = resolve_device(args.device)
-    batch = args.batch
-    if batch == -1 and device in ("cpu", "mps"):
-        batch = 16  # l'auto-batch (-1) mesure la VRAM : CUDA uniquement
+
+    if device == "mps":
+        cfg = resolve_mac_settings(args)
+        batch, workers, imgsz = cfg["batch"], cfg["workers"], cfg["imgsz"]
+    else:
+        imgsz = args.imgsz
+        batch = args.batch if args.batch != -1 else (16 if device == "cpu" else args.batch)
+        workers = args.workers if args.workers and args.workers > 0 else 8
+
+    if device == "mps":
+        print(f"==> Mac MPS : batch={batch}, workers={workers}, imgsz={imgsz}, "
+              f"cache={args.cache} (24 Go unifiés exploités).")
 
     model = YOLO(args.model)
     results = model.train(
         data=str(ds_root / "data.yaml"),
-        imgsz=args.imgsz,           # 640 mini : les drones lointains sont minuscules
+        imgsz=imgsz,                # 640 mini : les drones lointains sont minuscules
         epochs=args.epochs,
         batch=batch,
         device=device,
+        workers=workers,            # CPU à fond pour le data-loading -> GPU jamais à l'arrêt
+        cache=args.cache,           # 'disk' : décode une fois, relit sans re-décoder
+        amp=True,                   # demi-précision : ~1.5-2x plus rapide en MPS
+        fraction=args.fraction,     # <1.0 = sous-échantillonne (itération rapide)
         patience=20,                # early stopping si la val stagne
-        cache="disk",
-        project=str(HERE / "runs"),
+        project=args.project or str(HERE / "runs"),  # Drive sur Colab = survit aux coupures
         name="drone_yolo11n",
         exist_ok=True,              # reprend le même dossier en cas de relance
     )
@@ -186,18 +236,35 @@ def train(ds_root: Path, args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    configure_apple_silicon()  # règle l'env MPS avant tout import de torch
     parser = argparse.ArgumentParser(description="Entraînement YOLO drone (GPU recommandé).")
     parser.add_argument("--model", default="yolo11n.pt",
                         help="Poids de départ (yolo11n.pt ; essayer yolo26n.pt si dispo).")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--batch", type=int, default=-1,
-                        help="-1 = auto selon la VRAM (CUDA) ; 16 par défaut sur mps/cpu.")
+                        help="-1 = auto (CUDA: VRAM ; Mac MPS: 32, ou 48 avec --fast). "
+                             "Si OOM/gel sur Mac, baisse (ex. --batch 24).")
     parser.add_argument("--device", default="auto",
                         help="auto (défaut : cuda > mps > cpu), '0' (GPU NVIDIA), 'mps', 'cpu'.")
+    parser.add_argument("--workers", type=int, default=-1,
+                        help="Threads dataloader (-1 = tous les cœurs CPU). Mac M3 = 8.")
+    parser.add_argument("--cache", default="disk", choices=["disk", "ram", "False"],
+                        help="disk (défaut, sûr) ; ram = plus rapide mais risque OOM "
+                             "sur Mac 24 Go avec ~30k images.")
+    parser.add_argument("--fraction", type=float, default=1.0,
+                        help="Fraction du train à utiliser (<1.0 pour itérer vite, ex. 0.3).")
+    parser.add_argument("--fast", action="store_true",
+                        help="Mac : preset vitesse (batch 48 + imgsz 512). "
+                             "Plus rapide, portée drone un peu réduite.")
     parser.add_argument("--version", type=int, default=None,
                         help="Version Roboflow du dataset (défaut : la plus récente).")
+    parser.add_argument("--project", default=None,
+                        help="Dossier des runs (défaut : ./runs). Sur Colab gratuit, "
+                             "pointe-le vers Drive pour que best.pt survive aux déconnexions.")
     args = parser.parse_args()
+    if args.cache == "False":
+        args.cache = False
 
     ds_root = download_dataset(args.version)
     remap_classes(ds_root)
