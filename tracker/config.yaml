@@ -85,12 +85,12 @@ pantilt:
   # gear_ratio PROPRE À CHAQUE MOTEUR : angle_caméra = gear_ratio * angle_servo (réduction mécanique).
   # Pour tourner la caméra de Δ°, le servo tourne de Δ/gear_ratio°.
   pan:                        # servo gauche/droite
-    pin: 12                   # GPIO BCM
+    pin: 23                   # GPIO BCM
     gear_ratio: 1.0
     min_pulse_ms: 0.5         # largeur d'impulsion à servo_min_deg (SG90 ~0.5 ms)
     max_pulse_ms: 2.5         # largeur d'impulsion à servo_max_deg (SG90 ~2.5 ms)
   tilt:                       # servo haut/bas
-    pin: 13                   # GPIO BCM
+    pin: 24                   # GPIO BCM
     gear_ratio: 1.0
     min_pulse_ms: 0.5
     max_pulse_ms: 2.5
