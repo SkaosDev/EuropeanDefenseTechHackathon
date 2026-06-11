@@ -125,6 +125,7 @@ class CameraCapture:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         cap.set(cv2.CAP_PROP_FPS, self.fps)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # pas de file d'anciennes frames -> moins de latence
         self._cap = cap
         return True
 
@@ -143,6 +144,10 @@ class CameraCapture:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         cap.set(cv2.CAP_PROP_FPS, self.fps)
+        # Buffer à 1 : le pilote ne garde pas une file d'anciennes frames. Sans ça, quand le
+        # décodage MJPG est plus lent que la caméra, la latence s'accumule (vidéo en retard +
+        # à-coups). Le thread de capture vide en continu, on veut donc toujours la + récente.
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self._cap = cap
         self._run = True
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)

@@ -312,7 +312,11 @@ class Dashboard:
                  focus_enabled: bool = False, focus_step: int = 50, zoom_step: int = 2000) -> None:
         self.host = config.get("mjpeg_host", "0.0.0.0")
         self.port = config.get("mjpeg_port", 5000)
-        self._frame: bytes | None = None      # dernier JPEG encodé
+        # Encodage JPEG déporté hors de la boucle d'inférence : on ne stocke que la frame
+        # annotée brute (ndarray) ; le thread MJPEG l'encode à la demande. Réglages perf :
+        self._jpeg_quality = int(config.get("jpeg_quality", 70))     # 80->70 : ~moins de CPU
+        self._stream_max_w = int(config.get("stream_max_width", 0))  # 0 = pas de réduction du flux
+        self._raw: "np.ndarray | None" = None  # dernière frame annotée (non encodée)
         self._seq = 0                          # incrémenté à chaque nouvelle frame
         self._data: dict = {"fps": 0.0, "timestamp": "", "objects": [], "cam": None}
         self._lock = threading.Lock()
@@ -350,14 +354,24 @@ class Dashboard:
         logger.info("Tableau de bord : http://{}:{}/", self.host, self.port)
 
     def update(self, frame: np.ndarray, data: dict) -> None:
-        """Publie la frame annotée + les données (stats/objets), thread-safe."""
-        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        if not ok:
-            return
+        """Publie la frame annotée + les données (stats/objets), thread-safe.
+
+        N'ENCODE PAS ici : on ne fait que mémoriser la référence (la frame n'est plus
+        modifiée ensuite par la boucle). L'encodage JPEG — coûteux — est fait par le thread
+        MJPEG, ce qui libère la boucle d'inférence et augmente le FPS de détection."""
         with self._lock:
-            self._frame = buf.tobytes()
+            self._raw = frame
             self._data = data
             self._seq += 1
+
+    def _encode(self, frame: np.ndarray) -> bytes:
+        """Encode une frame en JPEG (réduction optionnelle de la largeur du flux)."""
+        if self._stream_max_w and frame.shape[1] > self._stream_max_w:
+            h, w = frame.shape[:2]
+            nh = int(h * self._stream_max_w / w)
+            frame = cv2.resize(frame, (self._stream_max_w, nh), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality])
+        return buf.tobytes() if ok else self._placeholder
 
     # -- routes ------------------------------------------------------------
 
@@ -405,17 +419,18 @@ class Dashboard:
 
     def _mjpeg_generator(self):
         # Tourne dans le thread Flask : DOIT dormir à chaque tour, sinon le busy-loop
-        # accapare le GIL et affame le pipeline. On n'émet que les frames nouvelles.
+        # accapare le GIL et affame le pipeline. On n'émet (et n'encode) que les frames
+        # nouvelles ; l'encodage JPEG a lieu ICI, hors de la boucle d'inférence.
         boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
         last_seq = None
         while True:
             with self._lock:
-                frame, seq = self._frame, self._seq
-            if frame is None:
-                frame, seq = self._placeholder, "placeholder"
-            if seq != last_seq:
-                last_seq = seq
-                yield boundary + frame + b"\r\n"
+                raw, seq = self._raw, self._seq
+            cur = "placeholder" if raw is None else seq
+            if cur != last_seq:
+                last_seq = cur
+                jpeg = self._placeholder if raw is None else self._encode(raw)
+                yield boundary + jpeg + b"\r\n"
             time.sleep(0.03)
 
     def _events(self) -> Response:

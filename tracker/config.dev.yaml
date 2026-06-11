@@ -96,6 +96,8 @@ output:
   mjpeg_stream: true          # priorité : flux navigateur, marche partout
   mjpeg_host: "127.0.0.1"     # dev local uniquement (mettre 0.0.0.0 pour exposer sur le réseau)
   mjpeg_port: 5173
+  jpeg_quality: 70            # qualité JPEG du flux (50–85) ; baisser = moins de CPU + bande passante
+  stream_max_width: 0         # largeur max du flux (0 = pleine résolution) ; n'affecte PAS la détection
   log_path: "logs/detections.json"
   log_rotation_mb: 10
   draw_trajectory: true

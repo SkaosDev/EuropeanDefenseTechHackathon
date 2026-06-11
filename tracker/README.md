@@ -201,6 +201,40 @@ Orientation par **2 servos SG90** (réglés dans la section `pantilt` du config)
 
 ---
 
+## ⚡ Optimisation Raspberry Pi
+
+Le coût dominant est **l'inférence YOLO** ; le reste (capture, overlay, encodage JPEG) est
+secondaire mais a été sorti de la boucle d'inférence. Leviers, du plus au moins impactant :
+
+1. **NCNN obligatoire** (~2× vs PyTorch sur ARM). Le détecteur charge `models/<nom>_ncnn_model/`
+   en priorité s'il existe. `setup.sh` l'exporte pour le modèle **drone** ; pour **base**,
+   exporter manuellement à la **même taille** que `inference_size` :
+   ```bash
+   venv/bin/python -m pip install ncnn
+   venv/bin/python -c "from ultralytics import YOLO; YOLO('models/yolov8n.pt').export(format='ncnn', imgsz=416)"
+   ```
+   Vérifier au démarrage la ligne `Export NCNN détecté : …`. Sans elle = chemin `.pt` lent.
+2. **`inference_size`** — personnes = grandes cibles : **416** suffit (≈2× le FPS vs 640).
+   Les drones lointains, eux, exigent 640 (ne pas descendre).
+3. **`camera.resolution`** — n'influe PAS sur la détection (downscalée à `inference_size`),
+   seulement sur le décodage MJPG + l'image affichée. 720p coûte cher en USB/CPU : passer à
+   `[640, 480]` si la vidéo doit être fluide ; garder 720p seulement si on veut une image nette.
+4. **Flux web** — `output.jpeg_quality` (70 par défaut) et `output.stream_max_width` (réduit la
+   largeur du flux envoyé au navigateur, sans toucher à la détection) : moins de CPU + bande passante.
+5. **Latence** — `CAP_PROP_BUFFERSIZE=1` (déjà appliqué) empêche l'accumulation d'anciennes frames
+   (sinon vidéo en retard + à-coups quand le décodage est plus lent que la caméra).
+6. **Servos** — utiliser le **pin factory pigpio** (PWM matériel) : moins de CPU et pas de jitter.
+   ```bash
+   sudo apt-get install -y pigpio python3-pigpio && sudo systemctl enable --now pigpiod
+   GPIOZERO_PIN_FACTORY=pigpio python main.py --model base
+   ```
+7. **Alimentation** — sous-tension = throttling CPU (FPS effondré + freezes). PSU 27 W officiel,
+   caméra sur **hub USB alimenté**, servos sur **alim 5 V dédiée** (masse commune avec le Pi —
+   ne JAMAIS tirer les servos sur le 5 V du Pi : les pics de courant font brownout → gros freezes).
+   Diagnostic : `vcgencmd get_throttled` (doit valoir `0x0`).
+
+---
+
 ## 📊 Performances cibles
 
 | Métrique | Objectif |

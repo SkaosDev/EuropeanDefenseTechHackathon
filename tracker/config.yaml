@@ -113,6 +113,8 @@ output:
   mjpeg_stream: true          # serveur MJPEG (priorité démo, fonctionne en headless)
   mjpeg_host: "0.0.0.0"
   mjpeg_port: 5000
+  jpeg_quality: 70            # qualité JPEG du flux (50–85) ; baisser = moins de CPU + bande passante
+  stream_max_width: 960       # largeur max du flux web (0 = pleine résolution) ; n'affecte PAS la détection
   log_path: "logs/detections.json"
   log_rotation_mb: 10
   draw_trajectory: true

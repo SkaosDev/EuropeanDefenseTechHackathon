@@ -9,6 +9,7 @@ Arrêt propre sur Ctrl+C / SIGTERM. Le redémarrage automatique en cas de crash 
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 import threading
@@ -41,8 +42,21 @@ def _handle_signal(signum, _frame) -> None:
     _stop.set()
 
 
+def _tune_cpu_threads() -> None:
+    """Utilise tous les cœurs du Pi pour l'inférence CPU (chemin .pt PyTorch).
+
+    Sous NCNN c'est déjà automatique ; sans effet néfaste si torch est absent."""
+    n = os.cpu_count() or 4
+    try:
+        import torch
+        torch.set_num_threads(n)
+    except Exception:  # noqa: BLE001 - torch absent / API différente
+        pass
+
+
 def run(config: dict, model_name: str | None = None) -> None:
     """Assemble les modules et traite le flux vidéo jusqu'à l'arrêt."""
+    _tune_cpu_threads()
     out = config["output"]
     det_cfg = config["detection"]
 
