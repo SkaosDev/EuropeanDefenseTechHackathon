@@ -46,3 +46,4 @@ class TrackedObject:
     hits: int = 0           # nombre de détections cumulées
     lost_frames: int = 0    # frames consécutives sans détection
     distance_m: float | None = None  # distance estimée caméra→objet (mètres)
+    first_seq: int = 0      # ordre d'acquisition (croissant) : sert à choisir la cible "la plus ancienne"

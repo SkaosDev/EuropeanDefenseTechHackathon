@@ -58,7 +58,7 @@ detection:
       inference_size: 640           # 640 mini — downscaler tue les petits drones (MDPI 2023)
     base:                           # YOLOv8n COCO : rapide, généraliste (PAS de drones)
       path: "models/yolov8n.pt"
-      classes: []
+      classes: ["person"]           # mode base = on ne détecte (et ne suit) QUE les humains
       priority_class: "person"
       confidence: 0.40
       inference_size: 640
@@ -66,6 +66,32 @@ detection:
 tracking:
   max_lost_frames: 30         # frames avant d'oublier un objet disparu
   min_hits: 3                 # détections avant d'afficher un track (anti-faux positifs)
+
+# Orientation caméra : la caméra suit la cible verrouillée (1re cible observée ; quand on la
+# perd, la plus ancienne encore visible). Classe suivie = priority_class du modèle.
+pantilt:
+  driver: servo               # servo (Raspberry Pi GPIO) | sim (dev : pas de moteur, déplacement simulé)
+  servo_min_deg: 0            # butées physiques du servo (SG90 : 0–180°)
+  servo_max_deg: 180
+  home_pan_deg: 90            # position de repos au démarrage (degrés servo) — caméra centrée
+  home_tilt_deg: 90
+  gain: 0.5                   # gain proportionnel de l'asservissement (0–1 ; <1 = lissé, anti-oscillation)
+  deadband_deg: 1.5           # zone morte : sous cette erreur angulaire, on ne bouge pas (anti-jitter)
+  max_step_deg: 8             # pas max par frame (degrés servo) — limite la vitesse, mouvement fluide
+  invert_pan: false           # sens du servo pan si câblé à l'envers
+  invert_tilt: false
+  # gear_ratio PROPRE À CHAQUE MOTEUR : angle_caméra = gear_ratio * angle_servo (réduction mécanique).
+  # Pour tourner la caméra de Δ°, le servo tourne de Δ/gear_ratio°.
+  pan:                        # servo gauche/droite
+    pin: 12                   # GPIO BCM
+    gear_ratio: 1.0
+    min_pulse_ms: 0.5         # largeur d'impulsion à servo_min_deg (SG90 ~0.5 ms)
+    max_pulse_ms: 2.5         # largeur d'impulsion à servo_max_deg (SG90 ~2.5 ms)
+  tilt:                       # servo haut/bas
+    pin: 13                   # GPIO BCM
+    gear_ratio: 1.0
+    min_pulse_ms: 0.5
+    max_pulse_ms: 2.5
 
 distance:
   # Estimation monoculaire basée sur la LARGEUR de la bbox (plus stable que la hauteur :

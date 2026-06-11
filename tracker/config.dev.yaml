@@ -53,7 +53,7 @@ detection:
       inference_size: 640         # ne pas baisser sous 640 (petits drones)
     base:
       path: "models/yolov8n.pt"
-      classes: []
+      classes: ["person"]         # mode base = on ne détecte (et ne suit) QUE les humains
       priority_class: "person"
       confidence: 0.40
       inference_size: 640
@@ -61,6 +61,23 @@ detection:
 tracking:
   max_lost_frames: 30
   min_hits: 3
+
+# Orientation caméra (suivi de cible). En dev : driver "sim" -> aucun servo, on simule le
+# déplacement et le cône caméra pivote dans la vue 3D du dashboard.
+pantilt:
+  driver: sim                 # dev : pas de GPIO. Mettre "servo" sur le Raspberry Pi (cf. config.yaml).
+  servo_min_deg: 0
+  servo_max_deg: 180
+  home_pan_deg: 90            # position de repos au démarrage (caméra centrée)
+  home_tilt_deg: 90
+  gain: 0.5                   # gain proportionnel (anti-oscillation)
+  deadband_deg: 1.5           # zone morte (anti-jitter)
+  max_step_deg: 8             # pas max par frame (limite de vitesse)
+  invert_pan: false
+  invert_tilt: false
+  # gear_ratio propre à chaque moteur : angle_caméra = gear_ratio * angle_servo.
+  pan:  { pin: 12, gear_ratio: 1.0, min_pulse_ms: 0.5, max_pulse_ms: 2.5 }   # GPIO BCM (ignoré en sim)
+  tilt: { pin: 13, gear_ratio: 1.0, min_pulse_ms: 0.5, max_pulse_ms: 2.5 }
 
 distance:
   # Basée sur la LARGEUR de bbox (stable quand on se penche) + lissage EMA par track.

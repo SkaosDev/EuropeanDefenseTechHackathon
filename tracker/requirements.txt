@@ -14,3 +14,5 @@ numpy>=1.26.0
 pyyaml>=6.0
 loguru>=0.7.0
 pyserial>=3.5             # contrôleur de focus SCF4 de la caméra C3 18X (camera.type: c3)
+gpiozero>=2.0            # servos pan/tilt sur Raspberry Pi (pantilt.driver: servo). Import paresseux :
+                         #   inutile en dev (pantilt.driver: sim) -> repli auto si absent.

@@ -129,8 +129,9 @@ function renderFocus(f) {
 // --- Vue 3D (Three.js) : caméra système au centre (cône) + cône de champ (FOV),
 // cibles placées par projection sténopé (centre du bbox + distance + focale).
 // Repère monde : +X droite, +Y haut, +Z = axe optique (devant la caméra). 1 unité = 1 m.
-let scene3d, cam3d, renderer3d, controls3d, fovGroup;
+let scene3d, cam3d, renderer3d, controls3d, fovGroup, camRig;
 let camKey = "";                       // (W,H,HFOV) courant, pour ne reconstruire le FOV qu'au besoin
+let camEuler = null;                   // orientation pan/tilt courante (appliquée aussi aux cibles)
 const meshes = new Map();              // id -> THREE.Mesh (sphère cible)
 
 function init3D() {
@@ -158,15 +159,18 @@ function init3D() {
     scene3d.add(grid);                                    // sol = plan XZ
     scene3d.add(new THREE.AxesHelper(4));
 
-    // Caméra système : cône bleu pointant vers +Z (axe optique), orientation fixe.
+    // Rig caméra : cône + frustum regroupés pour pivoter ensemble (pan/tilt des servos).
+    camRig = new THREE.Group(); scene3d.add(camRig);
+
+    // Caméra système : cône bleu pointant vers +Z (axe optique du rig).
     const coneGeo = new THREE.ConeGeometry(2, 5, 28);
     coneGeo.rotateX(Math.PI / 2);                         // apex vers +Z
     coneGeo.translate(0, 0, 2.5);
     const cone = new THREE.Mesh(coneGeo,
       new THREE.MeshStandardMaterial({ color: 0x58a6ff }));
-    scene3d.add(cone);
+    camRig.add(cone);
 
-    fovGroup = new THREE.Group(); scene3d.add(fovGroup);  // frustum de champ, construit au 1er paquet
+    fovGroup = new THREE.Group(); camRig.add(fovGroup);   // frustum de champ, construit au 1er paquet
     window.addEventListener("resize", resize3D);
     animate3D();
   } catch (err) { scene3d = null; console.warn("Vue 3D indisponible :", err); }
@@ -212,6 +216,16 @@ function render3D(d) {
   const W = d.cam.w, H = d.cam.h, hfov = d.cam.hfov_deg;
   buildFrustum(W, H, hfov);
   const focal = (W / 2) / Math.tan(hfov * Math.PI / 180 / 2);
+
+  // Orientation pan/tilt (servos / simu) : on pivote le rig caméra ET on applique la même
+  // rotation aux cibles, qui sont calculées dans le repère caméra. Ainsi, quand la caméra
+  // tourne pour suivre la cible verrouillée, le cône reste pointé sur elle (cohérence monde).
+  const pt = d.pantilt || { pan_cam: 0, tilt_cam: 0 };
+  const panRad = pt.pan_cam * Math.PI / 180, tiltRad = pt.tilt_cam * Math.PI / 180;
+  // +pan_cam = caméra vers la droite (yaw +Y) ; +tilt_cam = vers le haut (pitch -X).
+  camEuler = new THREE.Euler(-tiltRad, panRad, 0, "YXZ");
+  if (camRig) camRig.rotation.copy(camEuler);
+
   const seen = new Set();
   for (const o of d.objects) {
     if (o.distance == null || !o.bbox) continue;          // sans distance/bbox : pas de position 3D
@@ -222,6 +236,7 @@ function render3D(d) {
     // "droite écran" est -X monde. On prend donc -u (sinon un objet à droite de
     // l'image s'afficherait à gauche). -v : haut de l'image -> +Y (haut écran), OK.
     const pos = new THREE.Vector3(-u, -v, 1).normalize().multiplyScalar(o.distance);
+    pos.applyEuler(camEuler);                             // dans le repère monde (caméra orientée)
     let m = meshes.get(o.id);
     if (!m) {
       m = new THREE.Mesh(new THREE.SphereGeometry(0.9, 16, 16),
@@ -229,6 +244,11 @@ function render3D(d) {
       scene3d.add(m); meshes.set(o.id, m);
     }
     m.material.color.set(colorFor(o.class));
+    // Cible verrouillée : sphère qui "brille" (emissive) et légèrement agrandie.
+    const locked = d.target_id != null && o.id === d.target_id;
+    m.material.emissive.set(locked ? colorFor(o.class) : 0x000000);
+    m.material.emissiveIntensity = locked ? 0.9 : 0.0;
+    const s = locked ? 1.35 : 1.0; m.scale.set(s, s, s);
     m.position.copy(pos);
     const txt = "#" + o.id + " " + o.class + " " + o.distance.toFixed(0) + "m";
     if (m.userData.txt !== txt) {
@@ -426,12 +446,17 @@ if __name__ == "__main__":
     server = Dashboard({"mjpeg_host": "0.0.0.0", "mjpeg_port": 5000})
     server.start()
     print("Tableau de bord sur http://localhost:5000/ (Ctrl+C pour arrêter)")
+    import math
     x = 0
     while True:
         img = np.zeros((480, 640, 3), dtype=np.uint8)
         cv2.circle(img, (x % 640, 240), 30, (0, 255, 0), -1)
+        # Pan/tilt factice qui oscille : le cône caméra doit pivoter dans la vue 3D.
+        pan = 30.0 * math.sin(x / 60.0)
         server.update(img, {"fps": 30.0, "timestamp": "demo",
                             "cam": {"w": 640, "h": 480, "hfov_deg": 66.0},
+                            "pantilt": {"driver": "sim", "pan_cam": round(pan, 1), "tilt_cam": 8.0},
+                            "target_id": 1,
                             "objects": [{"id": 1, "class": "drone", "conf": 0.9, "distance": 12.0,
                                          "bbox": [x % 640 - 30, 210, x % 640 + 30, 270]}]})
         x += 8

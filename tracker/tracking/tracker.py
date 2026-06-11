@@ -20,6 +20,7 @@ class ObjectTracker:
         self.min_hits = config.get("min_hits", 3)
         self.traj_len = config.get("trajectory_length", 50)
         self.tracks: dict[int, TrackedObject] = {}
+        self._seq = 0  # compteur croissant : estampille l'ordre de création des tracks
 
     def update(self, detections: list[Detection]) -> list[TrackedObject]:
         """Met à jour l'état avec les détections du frame et renvoie les objets confirmés."""
@@ -30,8 +31,10 @@ class ObjectTracker:
                 continue
             obj = self.tracks.get(tid)
             if obj is None:
+                self._seq += 1
                 obj = TrackedObject(track_id=tid, detection=det,
-                                    trajectory=deque(maxlen=self.traj_len))
+                                    trajectory=deque(maxlen=self.traj_len),
+                                    first_seq=self._seq)
                 self.tracks[tid] = obj
             obj.detection = det
             obj.hits += 1

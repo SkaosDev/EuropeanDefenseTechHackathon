@@ -23,11 +23,13 @@ from loguru import logger
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from camera.capture import CameraCapture
+from camera.pantilt import PanTiltController
 from detection.detector import ObjectDetector
 from detection.distance import DistanceEstimator
 from output.logger import DetectionLogger
 from output.overlay import Overlay
 from output.stream import Dashboard
+from tracking.target import TargetSelector
 from tracking.tracker import ObjectTracker
 from utils.fps_counter import FPSCounter
 
@@ -94,6 +96,11 @@ def run(config: dict, model_name: str | None = None) -> None:
     tracker = ObjectTracker(config["tracking"])
     distance = DistanceEstimator(config.get("distance", {}), config["camera"]["resolution"][0])
     smooth = config.get("distance", {}).get("smoothing", 0.3)
+    # Suivi de cible : on verrouille la classe prioritaire (person en base, drone en drone)
+    # et on oriente la caméra (servos sur Pi, simulé en dev) pour la garder au centre.
+    selector = TargetSelector(priority)
+    pantilt = PanTiltController(config.get("pantilt", {}))
+    pantilt.start()
     overlay = Overlay(out)
     det_logger = DetectionLogger(out)
     # Contrôles de focus (caméra C3 18X) : boutons autofocus + réglage manuel,
@@ -137,9 +144,15 @@ def run(config: dict, model_name: str | None = None) -> None:
             # Priorité d'affichage : les drones d'abord (dans la table comme à l'écran).
             objects.sort(key=lambda o: o.detection.class_name.lower() != priority.lower())
 
+            h, w = frame.shape[:2]
+            # Cible verrouillée -> on oriente la caméra pour la centrer (servos prod / simu dev).
+            # Aucune cible visible : on laisse la caméra sur sa dernière orientation.
+            target = selector.select(objects)
+            if target is not None:
+                pantilt.track(target.detection.bbox, w, h, distance.hfov_deg)
+
             timestamp = datetime.now().isoformat(timespec="seconds")
             overlay.draw(frame, objects, fps.fps, timestamp, priority)
-            h, w = frame.shape[:2]
             dashboard.update(frame, {
                 "fps": round(fps.fps, 1),
                 "timestamp": timestamp.split("T")[-1],
@@ -151,11 +164,16 @@ def run(config: dict, model_name: str | None = None) -> None:
                              "distance": o.distance_m,
                              "bbox": list(o.detection.bbox)} for o in objects],
                 "focus": cam.focus_state(),
+                # orientation caméra (pan/tilt) + id de la cible suivie : la vue 3D fait
+                # pivoter le cône caméra et met la cible en évidence.
+                "pantilt": pantilt.state(),
+                "target_id": selector.current_id,
             })
             det_logger.log(objects, timestamp)
             fps.tick()
     finally:
         cam.stop()
+        pantilt.close()
         det_logger.close()
         logger.info("Arrêté proprement.")
 

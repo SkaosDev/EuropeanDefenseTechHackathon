@@ -19,6 +19,10 @@ leur **distance** à la caméra, le tout sur un **tableau de bord web unique** (
 - **Estimation de distance** monoculaire (focale + largeur réelle), lissée par track.
 - **Tableau de bord unique** (`/`) : vidéo annotée + cibles + journal (poussé en SSE).
 - **Priorité drone** : mis en avant (rouge, listé en premier).
+- **Suivi de cible + caméra pan/tilt** : la caméra verrouille une cible (1re personne/drone
+  observé·e ; quand on la perd, la plus ancienne encore visible) et s'oriente pour la garder
+  au centre — **2 servos SG90** (pan/tilt) sur le Pi, **simulés** en dev (le cône caméra
+  pivote dans la vue 3D). Cf. § *Suivi & pan/tilt*.
 - **Robustesse** : fallback caméra, arrêt propre par signaux, redémarrage délégué à systemd.
 - **Offline total** : aucune dépendance cloud une fois le modèle téléchargé.
 
@@ -64,6 +68,8 @@ capture ─▶ detect ──────▶ track ─▶ distance ─▶ overlay
 | `detection/detector.py` | `ObjectDetector` : YOLO (NCNN auto-détecté), `detect()` (+ ByteTrack), filtrage classes |
 | `detection/distance.py` | `DistanceEstimator` : distance monoculaire (largeur) caméra→objet |
 | `tracking/tracker.py` | `ObjectTracker` : IDs ByteTrack, trajectoires, durée de vie |
+| `tracking/target.py` | `TargetSelector` : verrouille la cible à suivre (1re observée, sinon la plus ancienne visible) |
+| `camera/pantilt.py` | `PanTiltController` : asservit 2 servos pan/tilt (gpiozero) pour centrer la cible — simulé en dev |
 | `output/overlay.py` | bboxes, labels (classe + distance), trajectoires, HUD |
 | `output/logger.py` | logs JSON-lines + rotation, écriture en thread démon |
 | `output/stream.py` | `Dashboard` Flask : page unique `/` + `/video` (MJPEG) + `/events` (SSE) |
@@ -145,6 +151,8 @@ python -m camera.capture
 python -m detection.detector    # nécessite ultralytics + un modèle dans models/
 python -m detection.distance
 python -m tracking.tracker
+python -m tracking.target        # sélection de cible (verrouillage / bascule / perte)
+python -m camera.pantilt         # géométrie d'erreur + asservissement (mode sim, sans matériel)
 python -m output.overlay        # écrit overlay_test.png
 python -m output.logger
 python -m output.stream         # tableau de bord de test sur :5000
@@ -163,6 +171,33 @@ détection des petits drones. Préférer :
 - **L'export NCNN** (fait automatiquement par `setup.sh` sur le Pi) : le détecteur charge
   `models/drone_yolo11n_ncnn_model/` en priorité s'il existe — ~2× plus rapide sur ARM.
 - Baisser la **résolution caméra** (l'inférence reste à 640).
+
+---
+
+## 🎯 Suivi & pan/tilt
+
+La caméra **suit une cible** et s'oriente pour la garder centrée. La cible = la classe
+`priority_class` du modèle (**person** en `base`, **drone** en `drone`). On verrouille la
+**première** cible observée et on la garde tant qu'elle est visible ; perdue, on bascule sur
+la **plus ancienne encore visible** ; plus rien de visible → la caméra **garde sa dernière
+orientation**.
+
+Orientation par **2 servos SG90** (réglés dans la section `pantilt` du config) :
+
+- `driver` : **`servo`** sur le Pi (GPIO via gpiozero), **`sim`** en dev (aucun moteur — le
+  cône caméra pivote dans la vue 3D du dashboard pour visualiser le suivi). Si `servo` est
+  demandé mais que gpiozero est absent / le GPIO indisponible → **repli automatique sur `sim`**.
+- `pan.pin` / `tilt.pin` : **GPIO BCM** des servos gauche/droite et haut/bas.
+- `pan.gear_ratio` / `tilt.gear_ratio` : réduction **propre à chaque moteur** —
+  `angle_caméra = gear_ratio × angle_servo` (le servo tourne `Δ/gear_ratio°` pour `Δ°` caméra).
+- `home_pan_deg` / `home_tilt_deg` : position de repos prise **au démarrage** (degrés servo).
+- `gain`, `deadband_deg`, `max_step_deg` : douceur de l'asservissement (lissage, zone morte
+  anti-jitter, vitesse max par frame). `invert_pan` / `invert_tilt` : si un servo est câblé à l'envers.
+- `min_pulse_ms` / `max_pulse_ms` : largeurs d'impulsion du servo (SG90 ≈ 0.5–2.5 ms ;
+  ajuster si la course réelle ne couvre pas 0–180°).
+
+> Câblage : alimenter les servos sur une source **5 V dédiée** (pas le 3V3 du Pi), masses
+> communes. Le signal PWM part des GPIO `pan.pin` / `tilt.pin`.
 
 ---
 
@@ -187,6 +222,8 @@ détection des petits drones. Préférer :
 | FPS bas sur Pi | Vérifier que l'export NCNN existe (`models/drone_yolo11n_ncnn_model/`, relancer `setup.sh` sinon) ; baisser la résolution caméra. |
 | Drones lointains non détectés | Monter `detection.inference_size` (960/1280) — au prix du FPS (cf. § Détection de drones). |
 | Distances aberrantes | Ajuster `distance.hfov_deg` (FOV réel caméra) et `distance.known_widths_m` par classe. |
+| Servos immobiles / `pan/tilt simulé` | Normal en dev (`pantilt.driver: sim`). Sur Pi : mettre `driver: servo`, `pip install gpiozero`, vérifier les GPIO `pan.pin`/`tilt.pin` et l'alim 5 V des servos. |
+| Caméra tourne dans le mauvais sens | Basculer `pantilt.invert_pan` / `invert_tilt`. Course incomplète → ajuster `min_pulse_ms`/`max_pulse_ms` ; amplitude caméra → `gear_ratio`. |
 | Page vide / image figée | Vérifier qu'un seul process tourne sur le port ; recharger `/`. |
 
 ---
