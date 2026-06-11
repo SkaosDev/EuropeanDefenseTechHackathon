@@ -8,6 +8,8 @@
 #      remplacer par "opencv-contrib-python" (fenêtre + trackers CSRT legacy).
 
 ultralytics>=8.4.0          # YOLO11/YOLO26 + export NCNN (8.4.63 au 2026-06)
+lapx>=0.5.11             # solveur d'assignation (lap.lapjv) requis par ByteTrack ; lapx = fork ARM-friendly
+                         #   (NE PAS installer "lap" : il casse sur ARM -> AttributeError lapjv)
 opencv-python-headless>=4.10.0
 flask>=3.0.0
 numpy>=1.26.0
