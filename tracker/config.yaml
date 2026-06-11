@@ -4,10 +4,11 @@
 # ============================================================================
 
 camera:
-  type: picamera              # picamera | webcam | c3   (C3 18X = caméra UVC + focus motorisé SCF4)
-  use_picamera: true          # rétro-compat si 'type' absent : true = PiCam, false = webcam
-  source: 0                   # index OpenCV (webcam ou C3 18X) ; vérifier avec test_kurokesu --list-cams
-  resolution: [640, 480]      # [largeur, hauteur] ; pour la C3, plutôt [1280, 720]
+  type: c3                    # picamera | webcam | c3   (C3 18X = caméra UVC + focus motorisé SCF4)
+  use_picamera: false         # rétro-compat si 'type' absent : true = PiCam, false = webcam
+  source: 1                   # index OpenCV de la C3 18X (UVC) ; LE VÉRIFIER : `v4l2-ctl --list-devices`
+                              #   (souvent 1 et non 0 : /dev/video0 est un sous-périphérique libcamera)
+  resolution: [1280, 720]     # [largeur, hauteur] ; la C3 18X préfère 720p
   fps: 30
   format: "RGB888"            # format picamera2 (renvoie un buffer compatible BGR)
 
