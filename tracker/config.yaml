@@ -62,7 +62,8 @@ detection:
       classes: ["person"]           # mode base = on ne détecte (et ne suit) QUE les humains
       priority_class: "person"
       confidence: 0.40
-      inference_size: 640
+      inference_size: 416           # personnes = grandes cibles : 416 suffit et ~double le FPS vs 640.
+                                    # IMPORTANT : exporter le NCNN à CETTE taille (imgsz=416), cf. README.
 
 tracking:
   max_lost_frames: 30         # frames avant d'oublier un objet disparu
