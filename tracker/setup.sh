@@ -4,6 +4,11 @@
 #  Usage : bash setup.sh [--service]
 #    --service : génère et active en plus un service systemd (démarrage auto).
 # ============================================================================
+
+# Ce script utilise des bashismes ([[ ]], ${BASH_SOURCE}…). Si on l'a lancé via
+# `sh setup.sh` (dash sur Pi OS), on se relance automatiquement sous bash.
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
+
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,13 +31,22 @@ else
 fi
 
 # --- 2. Dépendances système (libcamera, picamera2 via apt) -----------------
+# Installés UN PAR UN : les noms diffèrent entre Bookworm et trixie (Pi OS récent) et un
+# paquet absent/renommé ne doit pas faire échouer toute l'installation.
+#   libcamera-apps  -> rpicam-apps      (trixie)
+#   libatlas-base-dev -> libopenblas-dev (trixie ; ATLAS retiré)
 echo "==> Installation des paquets système (sudo requis)..."
-sudo apt-get update
-sudo apt-get install -y \
-  python3-venv python3-pip python3-dev \
-  python3-picamera2 libcamera-apps \
-  libatlas-base-dev libopenjp2-7 ffmpeg || \
-  echo "!! Certains paquets n'ont pas pu être installés (machine de dev ?). On continue."
+sudo apt-get update || true
+SYS_PKGS="python3-venv python3-pip python3-dev \
+  python3-picamera2 libcamera-apps rpicam-apps \
+  libopenblas-dev libatlas-base-dev libopenjp2-7 ffmpeg"
+for pkg in $SYS_PKGS; do
+  if sudo apt-get install -y "$pkg" >/dev/null 2>&1; then
+    echo "   ok       : $pkg"
+  else
+    echo "   ignoré   : $pkg (indisponible sur cette distrib — normal pour un équivalent renommé)"
+  fi
+done
 
 # --- 3. Environnement virtuel ----------------------------------------------
 # --system-site-packages : indispensable pour voir picamera2 (installé par apt).
