@@ -119,10 +119,14 @@ def run(config: dict, model_name: str | None = None) -> None:
     det_logger = DetectionLogger(out)
     # Contrôles de focus (caméra C3 18X) : boutons autofocus + réglage manuel,
     # branchés sur la caméra. No-op / boutons masqués pour les autres sources.
+    focus_cfg = config["camera"].get("focus", {}) or {}
     dashboard = Dashboard(out, on_autofocus=cam.autofocus, on_nudge=cam.adjust_focus,
                           on_zoom=cam.adjust_zoom, on_dezoom_max=cam.dezoom_max,
+                          on_set_focus=cam.set_focus,
                           focus_enabled=cam.focus_enabled, focus_step=cam.manual_step,
-                          zoom_step=cam.zoom_step)
+                          zoom_step=cam.zoom_step,
+                          focus_min=int(focus_cfg.get("focus_min", 0)),
+                          focus_max=int(focus_cfg.get("focus_max", 0)))
     dashboard.start()
     fps = FPSCounter()
 

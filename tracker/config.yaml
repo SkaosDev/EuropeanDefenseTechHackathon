@@ -12,6 +12,12 @@ camera:
   fps: 30
   format: "RGB888"            # format picamera2 (renvoie un buffer compatible BGR)
 
+  # Anti-freeze (backend c3) : un read() USB pendu fige l'image. Le thread de capture
+  # se reconnecte après trop d'échecs ET un watchdog rouvre la caméra si plus aucune
+  # frame n'arrive (débloque un read() bloqué). Les freeze repartent alors seuls.
+  capture_watchdog_sec: 3     # sans nouvelle frame pendant ce délai -> reconnexion auto
+  read_fail_limit: 60         # nb d'échecs de lecture consécutifs avant reconnexion
+
   # Zoom motorisé (axe A) — utilisé UNIQUEMENT si type == c3.
   zoom:
     dezoom_on_start: true     # au lancement (avant l'autofocus) : pousse le zoom jusqu'à la butée grand-angle
@@ -39,7 +45,14 @@ camera:
     early_stop_ratio: 0.30    # arrêt anticipé de la passe grossière (pic dépassé)
     roi_ratio: 0.40           # ROI centrale de mesure de netteté (40 % de l'image)
     manual_step: 50           # pas des boutons +/- du dashboard
-    settle_sec: 0.15          # fenêtre de mesure de netteté après l'arrêt moteur
+    settle_sec: 0.4           # fenêtre de mesure de netteté après l'arrêt moteur (l'AF est rare -> on prend le temps)
+    # Fiabilité : on CONFIRME la position réelle du moteur (le flag « en mouvement » du SCF4
+    # peut mentir) et on ne mesure la netteté que sur des frames CAPTURÉES APRÈS le déplacement
+    # (sinon, sur Pi, la latence pipeline fait mesurer l'ancien point de focus -> reste flou).
+    position_tolerance: 30    # écart max toléré entre consigne et position lue (pas)
+    position_retries: 2       # nb de réessais si la position lue s'écarte trop de la consigne
+    fresh_frames: 3           # nb de frames neuves à attendre après l'arrêt moteur avant de mesurer
+    live_sharpness_interval: 0.2  # période (s) de calcul de la netteté affichée en direct (réglage manuel)
 
 detection:
   # Choix du modèle (surchargeable : python main.py --model drone|base) :

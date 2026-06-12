@@ -33,9 +33,14 @@ class LensController:
     """
 
     def __init__(self, dev, focus_cfg: dict, get_latest_frame: Callable[[], "np.ndarray | None"],
-                 zoom_cfg: dict | None = None):
+                 zoom_cfg: dict | None = None,
+                 get_frame_id: "Callable[[], int] | None" = None):
         self.dev = dev                       # instance scf4.SCF4 déjà connectée
         self._get_frame = get_latest_frame   # renvoie la dernière frame BGR (ou None)
+        # Identité de la dernière frame (monotone) : permet d'attendre des frames
+        # FRAÎCHES après un déplacement moteur (purge la latence pipeline caméra).
+        # Sans callback (ancien appelant), on ne fait que l'attente temporelle.
+        self._get_frame_id = get_frame_id
         cfg = focus_cfg or {}
         zcfg = zoom_cfg or {}
 
@@ -63,8 +68,14 @@ class LensController:
         self.early_stop_ratio = float(cfg.get("early_stop_ratio", 0.30))
         self.roi_ratio = float(cfg.get("roi_ratio", 0.40))
         self.manual_step = int(cfg.get("manual_step", 50))
-        self.settle_sec = float(cfg.get("settle_sec", 0.15))
+        self.settle_sec = float(cfg.get("settle_sec", 0.4))
         self.home_on_start = bool(cfg.get("home_on_start", True))
+        # Fiabilité du focus : confirmer la position réelle (vs flag « en mouvement »)
+        # et ne mesurer qu'après des frames postérieures au déplacement.
+        self.position_tolerance = int(cfg.get("position_tolerance", 30))
+        self.position_retries = int(cfg.get("position_retries", 2))
+        self.fresh_frames = int(cfg.get("fresh_frames", 3))
+        self.live_sharpness_interval = float(cfg.get("live_sharpness_interval", 0.2))
 
         self._position = self._clamp((self.focus_min + self.focus_max) // 2)
         self._busy = False                   # un autofocus est en cours
@@ -72,7 +83,9 @@ class LensController:
         self._thread: threading.Thread | None = None
         self._serial_lock = threading.Lock()  # une seule opération moteur à la fois
         self._lock = threading.Lock()         # protège l'état publié
-        self._state = {"enabled": True, "status": "idle", "position": None, "sharpness": 0.0}
+        self._live_ts = 0.0                  # dernier calcul de netteté live (throttle)
+        self._state = {"enabled": True, "status": "idle", "position": None,
+                       "sharpness": 0.0, "live_sharpness": 0.0}
 
     # ------------------------------------------------------------------ cycle de vie
 
@@ -155,22 +168,30 @@ class LensController:
 
     def adjust_focus(self, delta: int) -> bool:
         """Décale le focus de `delta` pas (signé). Ignoré si autofocus en cours."""
+        return self._goto(self._position + int(delta), "Focus manuel")
+
+    def set_focus(self, position: int) -> bool:
+        """Va à une position de focus ABSOLUE (champ numérique du dashboard).
+        Ignoré si un autofocus est en cours."""
+        return self._goto(int(position), "Focus set")
+
+    def _goto(self, target: int, label: str) -> bool:
+        """Déplacement focus ponctuel (manuel / valeur précise) avec position
+        vérifiée et mesure de netteté sur frames fraîches. Renvoie False si occupé."""
         if self._busy:
-            logger.info("Réglage manuel ignoré : autofocus en cours.")
+            logger.info("{} ignoré : autofocus en cours.", label)
             return False
         if not self._serial_lock.acquire(blocking=False):
             return False
         try:
-            target = self._clamp(self._position + int(delta))
-            self.dev.move_to_backlash("B", target, self.backlash_steps, self.approach_dir, wait=True)
-            self._position = target
-            frame = self._get_frame()
-            s = self._sharpness(frame) if frame is not None else 0.0
-            self._set_state(status="done", position=target, sharpness=s)
-            logger.info("Focus manuel -> {} (net={:.0f})", target, s)
+            target = self._clamp(target)
+            actual, s = self._move_and_measure(target, backlash=True)
+            self._position = actual
+            self._set_state(status="done", position=actual, sharpness=s)
+            logger.info("{} -> consigne={} réel={} (net={:.0f})", label, target, actual, s)
             return True
         except Exception as exc:  # noqa: BLE001 - perte série / timeout moteur
-            logger.warning("Réglage focus manuel échoué : {}", exc)
+            logger.warning("{} échoué : {}", label, exc)
             self._set_state(status="error")
             return False
         finally:
@@ -218,8 +239,33 @@ class LensController:
             self._serial_lock.release()
 
     def state(self) -> dict:
+        """État publié + rafraîchit la netteté LIVE (hors AF, throttlée).
+
+        Appelée à chaque tour de la boucle principale : le throttle interne
+        (`live_sharpness_interval`) évite de saturer le CPU du Pi."""
+        self._update_live_sharpness()
         with self._lock:
             return dict(self._state)
+
+    def _update_live_sharpness(self) -> None:
+        """Calcule la netteté de la frame courante pour l'affichage temps réel.
+
+        Seulement hors autofocus (pendant l'AF, l'état porte déjà la netteté du
+        balayage) et au plus une fois par `live_sharpness_interval`."""
+        if self._busy:
+            return
+        now = time.monotonic()
+        if now - self._live_ts < self.live_sharpness_interval:
+            return
+        self._live_ts = now
+        frame = self._get_frame()
+        if frame is None:
+            return
+        try:
+            s = self._sharpness(frame)
+        except Exception:  # noqa: BLE001 - frame malformée : on ignore ce tour
+            return
+        self._set_state(live_sharpness=s)
 
     # ------------------------------------------------------------------ autofocus (interne)
 
@@ -246,13 +292,15 @@ class LensController:
             lo = self._clamp(peak_c - self.fine_window)
             hi = self._clamp(peak_c + self.fine_window)
             fine = self._scan_range(lo, hi, self.fine_step)
+            logger.info("Autofocus C3 : courbe fine = {}",
+                        [(p, round(s)) for p, s in fine] if fine else "(vide)")
             best = self._parabolic_peak(fine) if fine else peak_c
 
-            final = self._move_and_measure(best, backlash=True)
-            self._position = best
-            self._set_state(status="done", position=best, sharpness=final)
-            logger.info("Autofocus C3 : pos={} net={:.0f} en {:.1f}s",
-                        best, final, time.time() - t0)
+            actual, final = self._move_and_measure(best, backlash=True)
+            self._position = actual
+            self._set_state(status="done", position=actual, sharpness=final)
+            logger.info("Autofocus C3 : consigne={} réel={} net={:.0f} en {:.1f}s",
+                        best, actual, final, time.time() - t0)
         except Exception as exc:  # noqa: BLE001 - perte série / timeout moteur
             logger.warning("Autofocus C3 échoué : {}", exc)
             self._set_state(status="error")
@@ -265,9 +313,9 @@ class LensController:
         for pos in range(int(lo), int(hi) + 1, int(step)):
             if self._stop.is_set():
                 break
-            s = self._move_and_measure(pos)
-            table.append((pos, s))
-            self._set_state(status="focusing", position=pos, sharpness=s)
+            actual, s = self._move_and_measure(pos)
+            table.append((actual, s))
+            self._set_state(status="focusing", position=actual, sharpness=s)
             if early_stop_ratio is not None:
                 peak = max(peak, s)
                 if peak > 0 and len(table) >= 3 and s < peak * (1 - early_stop_ratio):
@@ -275,16 +323,21 @@ class LensController:
         return table
 
     def _move_and_measure(self, pos, settle=None, backlash=False):
-        """Va à `pos`, attend l'arrêt moteur, renvoie le MAX de netteté sur une
-        courte fenêtre (les frames de transition sont plus floues -> le max =
-        image stabilisée, robuste à la latence du pipeline caméra)."""
+        """Va à `pos`, CONFIRME la position réelle, attend des frames FRAÎCHES,
+        puis renvoie le MAX de netteté sur une courte fenêtre.
+
+        Renvoie (actual_position, sharpness) : la netteté est mesurée seulement sur
+        des frames capturées APRÈS l'arrêt moteur (purge la latence pipeline caméra),
+        ce qui évite d'associer une netteté à l'ancien point de focus.
+        """
         settle = self.settle_sec if settle is None else settle
         pos = self._clamp(pos)
-        if backlash:
-            self.dev.move_to_backlash("B", pos, self.backlash_steps, self.approach_dir, wait=True)
-        else:
-            self.dev.move_abs("B", pos, wait=True)
+        actual = self.dev.move_to_verified(
+            "B", pos, self.backlash_steps if backlash else 0,
+            self.approach_dir, tolerance=self.position_tolerance,
+            retries=self.position_retries, wait=True)
 
+        waited = self._wait_fresh_frames()
         best = 0.0
         t0 = time.time()
         while time.time() - t0 < settle:
@@ -294,7 +347,27 @@ class LensController:
                 if s > best:
                     best = s
             time.sleep(0.02)
-        return best
+        logger.debug("AF pas: consigne={} réel={} net={:.0f} frames_attendues={} dt={:.2f}s",
+                     pos, actual, best, waited, time.time() - t0)
+        return actual, best
+
+    def _wait_fresh_frames(self, timeout=1.0):
+        """Attend `fresh_frames` nouvelles frames après le déplacement moteur.
+
+        Garantit que la frame mesurée a été capturée APRÈS l'arrêt — sinon, sur Pi,
+        on mesurerait des frames encore en transit (ancien focus). Renvoie le nombre
+        de frames effectivement attendues (0 si pas de compteur d'id disponible)."""
+        if self._get_frame_id is None:
+            time.sleep(min(timeout, self.settle_sec))   # repli temporel sans compteur
+            return 0
+        start = self._get_frame_id()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            got = self._get_frame_id() - start
+            if got >= self.fresh_frames:
+                return got
+            time.sleep(0.01)
+        return self._get_frame_id() - start
 
     def _parabolic_peak(self, table):
         """Position du score max + interpolation parabolique sub-pas."""

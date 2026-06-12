@@ -177,6 +177,27 @@ class SCF4:
             self.move_abs(axis, pre, wait=wait)
         self.move_abs(axis, pos, wait=wait, on_poll=on_poll)
 
+    def move_to_verified(self, axis, pos, backlash=20, approach_dir=1, tolerance=30,
+                         retries=2, wait=True, on_poll=None):
+        """Atteint `pos` avec backlash PUIS confirme la position réellement lue.
+
+        Le flag « en mouvement » de `wait_stop` peut mentir (le SCF4 répond à G0
+        avant de démarrer le moteur). On lit donc la position réelle après le
+        mouvement : si l'écart à la consigne dépasse `tolerance`, on réessaie
+        (jusqu'à `retries`). Renvoie la position réelle finale (int).
+        """
+        pos = int(pos)
+        actual = pos
+        for attempt in range(int(retries) + 1):
+            self.move_to_backlash(axis, pos, backlash, approach_dir, wait=wait, on_poll=on_poll)
+            actual = self.position(axis)
+            if abs(actual - pos) <= int(tolerance):
+                return actual
+            if self.verbose:
+                print(f"  ! axe {axis} : consigne {pos}, lu {actual} "
+                      f"(écart {actual - pos}), retry {attempt + 1}/{retries}")
+        return actual
+
     def set_speed(self, axis, value):
         self.send(f"M240 {axis}{int(value)}")
 

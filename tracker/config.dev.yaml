@@ -12,6 +12,9 @@ camera:
   fps: 30
   format: "RGB888"            # ignoré en mode webcam
 
+  capture_watchdog_sec: 3     # (c3) reconnexion auto si plus aucune frame pendant ce délai
+  read_fail_limit: 60         # (c3) nb d'échecs de lecture consécutifs avant reconnexion
+
   # Zoom + focus motorisés de la C3 18X (utilisés uniquement si type == c3).
   zoom:
     dezoom_on_start: true     # au lancement (avant l'autofocus) : pousse le zoom jusqu'à la butée grand-angle
@@ -35,7 +38,11 @@ camera:
     early_stop_ratio: 0.30
     roi_ratio: 0.40
     manual_step: 50
-    settle_sec: 0.15
+    settle_sec: 0.4           # fenêtre de mesure après l'arrêt moteur (l'AF est rare -> on prend le temps)
+    position_tolerance: 30    # écart max toléré consigne/position lue (pas) ; sinon réessai
+    position_retries: 2       # nb de réessais si la position lue s'écarte trop
+    fresh_frames: 3           # nb de frames neuves à attendre après l'arrêt avant de mesurer
+    live_sharpness_interval: 0.2  # période (s) de calcul de la netteté affichée en direct
 
 detection:
   # drone (YOLO11n custom : drone/bird/airplane) | base (COCO, rapide, sans drone)

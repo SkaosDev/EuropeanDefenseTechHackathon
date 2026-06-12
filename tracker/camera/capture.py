@@ -50,6 +50,17 @@ class CameraCapture:
         self._capture_thread: threading.Thread | None = None
         self._run = False
 
+        # Anti-freeze (backend c3) : identité + horodatage de la dernière frame, pour
+        # qu'un watchdog détecte un flux figé et rouvre la VideoCapture. `_frame_id`
+        # sert aussi au focus pour ne mesurer la netteté que sur des frames FRAÎCHES.
+        self._frame_id = 0
+        self._last_frame_ts = 0.0          # time.monotonic() de la dernière lecture OK
+        self._consec_read_fail = 0
+        self._watchdog_thread: threading.Thread | None = None
+        self._cap_lock = threading.Lock()  # protège l'ouverture/fermeture de _cap
+        self._watchdog_sec = float(config.get("capture_watchdog_sec", 3.0))
+        self._read_fail_limit = int(config.get("read_fail_limit", 60))
+
         # Focus + zoom motorisés (uniquement backend c3, si le SCF4 répond).
         self._focus_cfg = config.get("focus", {}) or {}
         self._zoom_cfg = config.get("zoom", {}) or {}
@@ -129,8 +140,8 @@ class CameraCapture:
         self._cap = cap
         return True
 
-    def _try_start_c3(self) -> bool:
-        """Ouvre le flux UVC de la C3 18X + lance le thread de capture (cache)."""
+    def _open_c3_capture(self) -> "cv2.VideoCapture | None":
+        """Ouvre (ou rouvre) le flux UVC de la C3 18X. Renvoie la VideoCapture ou None."""
         if sys.platform == "darwin":
             backend = cv2.CAP_AVFOUNDATION
         elif sys.platform.startswith("win"):
@@ -139,7 +150,8 @@ class CameraCapture:
             backend = cv2.CAP_ANY
         cap = cv2.VideoCapture(self.cfg.get("source", 0), backend)
         if not cap.isOpened():
-            return False
+            cap.release()
+            return None
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
@@ -148,28 +160,100 @@ class CameraCapture:
         # décodage MJPG est plus lent que la caméra, la latence s'accumule (vidéo en retard +
         # à-coups). Le thread de capture vide en continu, on veut donc toujours la + récente.
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        return cap
+
+    def _try_start_c3(self) -> bool:
+        """Ouvre le flux UVC de la C3 18X + lance les threads capture & watchdog."""
+        cap = self._open_c3_capture()
+        if cap is None:
+            return False
         self._cap = cap
         self._run = True
+        self._last_frame_ts = time.monotonic()
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._capture_thread.start()
+        self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
+        self._watchdog_thread.start()
         return True
 
+    def _reconnect_c3(self) -> bool:
+        """Ferme et rouvre la VideoCapture (débloque un read() pendu). Best-effort."""
+        with self._cap_lock:
+            old = self._cap
+            self._cap = None        # le capture_loop verra None et patientera
+            if old is not None:
+                try:
+                    old.release()   # release débloque un read() bloqué sur le pilote
+                except Exception:   # noqa: BLE001
+                    pass
+            cap = self._open_c3_capture()
+            if cap is None:
+                logger.warning("C3 : ré-ouverture de la caméra échouée, nouvel essai bientôt.")
+                return False
+            self._cap = cap
+            self._consec_read_fail = 0
+            self._last_frame_ts = time.monotonic()
+            logger.info("C3 : caméra ré-ouverte avec succès.")
+            return True
+
     def _capture_loop(self) -> None:
-        """Lit la VideoCapture en continu dans le cache (unique lecteur)."""
-        while self._run and self._cap is not None:
-            ok, frame = self._cap.read()
+        """Lit la VideoCapture en continu dans le cache (unique lecteur).
+
+        Compte les frames (id + horodatage) pour le watchdog et le focus, et
+        déclenche une reconnexion après trop d'échecs de lecture consécutifs.
+        """
+        frames = 0
+        t_log = time.monotonic()
+        while self._run:
+            cap = self._cap
+            if cap is None:                 # reconnexion en cours
+                time.sleep(0.02)
+                continue
+            ok, frame = cap.read()
             if ok and frame is not None:
+                now = time.monotonic()
                 with self._frame_lock:
                     self._frame = frame
+                    self._frame_id += 1
+                    self._last_frame_ts = now
+                self._consec_read_fail = 0
+                frames += 1
+                if now - t_log >= 5.0:      # FPS de capture réel (diagnostic Pi)
+                    logger.debug("C3 capture : {:.1f} fps (id={})",
+                                 frames / (now - t_log), self._frame_id)
+                    frames = 0
+                    t_log = now
             else:
-                time.sleep(0.005)
+                self._consec_read_fail += 1
+                if self._consec_read_fail == 1 or self._consec_read_fail % 30 == 0:
+                    logger.warning("C3 : lecture échouée ({} d'affilée).", self._consec_read_fail)
+                if self._consec_read_fail >= self._read_fail_limit:
+                    logger.warning("C3 : {} échecs de lecture -> reconnexion.",
+                                   self._consec_read_fail)
+                    self._reconnect_c3()
+                    time.sleep(0.2)         # back-off
+                else:
+                    time.sleep(0.005)
+
+    def _watchdog_loop(self) -> None:
+        """Détecte un flux figé (read() pendu sur hoquet USB) et rouvre la caméra."""
+        while self._run:
+            time.sleep(0.5)
+            if self._cap is None:
+                continue
+            stale = time.monotonic() - self._last_frame_ts
+            if stale > self._watchdog_sec:
+                logger.warning("C3 : aucune frame depuis {:.1f}s -> reconnexion (watchdog).", stale)
+                self._reconnect_c3()
+                time.sleep(0.5)             # laisse le temps à la nouvelle capture de démarrer
 
     def _start_lens(self) -> None:
         """Ouvre le contrôleur SCF4 et arme l'autofocus. Best-effort : si absent,
         on log et le focus reste désactivé (la vidéo continue de tourner)."""
         try:
             dev = scf4.SCF4(port=self._focus_cfg.get("port", "auto"))
-            lens = LensController(dev, self._focus_cfg, self.get_frame, self._zoom_cfg)
+            lens = LensController(dev, self._focus_cfg, self.get_frame, self._zoom_cfg,
+                                  get_frame_id=self.frame_id)
             lens.start()
             self._lens = lens
             logger.info("Focus C3 18X activé (contrôleur SCF4 sur {}).", dev.port)
@@ -184,6 +268,29 @@ class CameraCapture:
         if self._backend == "c3":
             with self._frame_lock:
                 return None if self._frame is None else self._frame.copy()
+        return self._get_frame_other()
+
+    def frame_id(self) -> int:
+        """Identité monotone de la dernière frame capturée (backend c3).
+
+        Sert au focus à attendre des frames FRAÎCHES après un déplacement moteur.
+        Sur les autres backends, dérive d'un compteur incrémenté à chaque get_frame."""
+        with self._frame_lock:
+            return self._frame_id
+
+    def get_frame_with_id(self) -> "tuple[np.ndarray | None, int]":
+        """Frame courante + son identité (atomique). Utile au focus pour savoir
+        si la frame lue est postérieure à un déplacement moteur."""
+        if self._backend == "c3":
+            with self._frame_lock:
+                frame = None if self._frame is None else self._frame.copy()
+                return frame, self._frame_id
+        return self.get_frame(), self._frame_id
+
+    def _get_frame_other(self) -> np.ndarray | None:
+        """Lecture directe pour les backends non-c3 (picamera/webcam)."""
+        if self._backend == "c3":
+            return None
         if self._backend == "picamera2" and self._picam is not None:
             # picamera2 "RGB888" renvoie déjà un buffer ordonné BGR (quirk libcamera).
             return self._picam.capture_array()
@@ -198,6 +305,9 @@ class CameraCapture:
         if self._capture_thread is not None:
             self._capture_thread.join(timeout=2)
             self._capture_thread = None
+        if self._watchdog_thread is not None:
+            self._watchdog_thread.join(timeout=2)
+            self._watchdog_thread = None
         try:
             if self._lens is not None:
                 self._lens.close()
@@ -227,6 +337,10 @@ class CameraCapture:
     def adjust_focus(self, delta: int) -> bool:
         """Décale le focus de `delta` pas. False si indisponible."""
         return self._lens.adjust_focus(delta) if self._lens is not None else False
+
+    def set_focus(self, position: int) -> bool:
+        """Va à une position de focus absolue (champ numérique). False si indisponible."""
+        return self._lens.set_focus(position) if self._lens is not None else False
 
     def adjust_zoom(self, delta: int) -> bool:
         """Décale le zoom de `delta` pas (delta<0 = dézoome). False si indisponible."""

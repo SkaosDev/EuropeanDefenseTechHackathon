@@ -51,7 +51,9 @@ _PAGE = """<!doctype html>
   button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
            padding: 6px 12px; font: inherit; cursor: pointer; }
   button:hover { background: #30363d; }
-  .focus-btns { display: flex; gap: 8px; margin-bottom: 8px; }
+  .focus-btns { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+  .focus-btns input { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
+                      border-radius: 6px; padding: 6px 8px; font: inherit; width: 110px; }
   .focus-state { font-size: 13px; color: #8b949e; }
   .focus-state b { color: #c9d1d9; font-weight: normal; }
   #scene3d { width: 100%; height: 340px; border-radius: 4px; overflow: hidden;
@@ -116,6 +118,10 @@ function af() { fetch("/focus/auto", { method: "POST" }); }
 function nudge(d) { fetch("/focus/nudge?delta=" + d, { method: "POST" }); }
 function zoom(d) { fetch("/zoom/nudge?delta=" + d, { method: "POST" }); }
 function dezoomMax() { fetch("/zoom/wide", { method: "POST" }); }
+function setFocus() {                                  // va à la position exacte saisie
+  const v = document.getElementById("focus-input").value;
+  if (v !== "") fetch("/focus/set?position=" + v, { method: "POST" });
+}
 const FOCUS_LABELS = { idle: "prêt", focusing: "mise au point…", done: "net", error: "erreur" };
 function renderFocus(f) {
   const el = document.getElementById("focus-state");
@@ -123,7 +129,8 @@ function renderFocus(f) {
   const st = FOCUS_LABELS[f.status] || f.status;
   const pos = f.position == null ? "—" : f.position;
   const net = (f.sharpness || 0).toFixed(0);
-  el.innerHTML = `état <b>${st}</b> · pos <b>${pos}</b> · net <b>${net}</b>`;
+  const live = (f.live_sharpness || 0).toFixed(0);    // netteté temps réel (réglage manuel)
+  el.innerHTML = `état <b>${st}</b> · pos <b>${pos}</b> · net <b>${net}</b> · net live <b>${live}</b>`;
 }
 
 // --- Vue 3D (Three.js) : caméra système au centre (cône) + cône de champ (FOV),
@@ -296,6 +303,12 @@ _FOCUS_CARD = """<div class="card"><h2>Optique (C3 18X)</h2>
           <button onclick="nudge(FOCUS_STEP)">+ net</button>
         </div>
         <div class="focus-btns">
+          <input id="focus-input" type="number" min="__FOCUS_MIN__" max="__FOCUS_MAX__"
+                 step="1" placeholder="__FOCUS_MIN__..__FOCUS_MAX__"
+                 onkeydown="if(event.key==='Enter')setFocus()">
+          <button onclick="setFocus()">Aller</button>
+        </div>
+        <div class="focus-btns">
           <button onclick="zoom(ZOOM_STEP)">− dézoom</button>
           <button onclick="zoom(-ZOOM_STEP)">+ zoom</button>
           <button onclick="dezoomMax()">grand-angle max</button>
@@ -308,8 +321,9 @@ class Dashboard:
     """Sert le tableau de bord unique + le flux MJPEG + le flux SSE de données."""
 
     def __init__(self, config: dict, on_autofocus=None, on_nudge=None,
-                 on_zoom=None, on_dezoom_max=None,
-                 focus_enabled: bool = False, focus_step: int = 50, zoom_step: int = 2000) -> None:
+                 on_zoom=None, on_dezoom_max=None, on_set_focus=None,
+                 focus_enabled: bool = False, focus_step: int = 50, zoom_step: int = 2000,
+                 focus_min: int = 0, focus_max: int = 0) -> None:
         self.host = config.get("mjpeg_host", "0.0.0.0")
         self.port = config.get("mjpeg_port", 5000)
         # Encodage JPEG déporté hors de la boucle d'inférence : on ne stocke que la frame
@@ -327,9 +341,12 @@ class Dashboard:
         self._on_nudge = on_nudge
         self._on_zoom = on_zoom
         self._on_dezoom_max = on_dezoom_max
+        self._on_set_focus = on_set_focus
         self._focus_enabled = focus_enabled
         self._focus_step = int(focus_step)
         self._zoom_step = int(zoom_step)
+        self._focus_min = int(focus_min)
+        self._focus_max = int(focus_max)
 
         # static_folder absolu (output/static/) : sert three.min.js + OrbitControls.js
         # vendorés → la vue 3D marche hors-ligne, quel que soit le dossier de lancement.
@@ -340,6 +357,7 @@ class Dashboard:
         self.app.add_url_rule("/events", "events", self._events)
         self.app.add_url_rule("/focus/auto", "focus_auto", self._focus_auto, methods=["POST"])
         self.app.add_url_rule("/focus/nudge", "focus_nudge", self._focus_nudge, methods=["POST"])
+        self.app.add_url_rule("/focus/set", "focus_set", self._focus_set, methods=["POST"])
         self.app.add_url_rule("/zoom/nudge", "zoom_nudge", self._zoom_nudge, methods=["POST"])
         self.app.add_url_rule("/zoom/wide", "zoom_wide", self._zoom_wide, methods=["POST"])
         self._thread: threading.Thread | None = None
@@ -383,7 +401,9 @@ class Dashboard:
         card = _FOCUS_CARD if self._focus_enabled else ""
         return (_PAGE.replace("<!--FOCUS_CARD-->", card)
                 .replace("__FOCUS_STEP__", str(self._focus_step))
-                .replace("__ZOOM_STEP__", str(self._zoom_step)))
+                .replace("__ZOOM_STEP__", str(self._zoom_step))
+                .replace("__FOCUS_MIN__", str(self._focus_min))
+                .replace("__FOCUS_MAX__", str(self._focus_max)))
 
     def _focus_auto(self):
         """Déclenche un autofocus one-shot (non bloquant)."""
@@ -397,6 +417,15 @@ class Dashboard:
         except (TypeError, ValueError):
             return {"ok": False, "error": "delta invalide"}, 400
         ok = bool(self._on_nudge and self._on_nudge(delta))
+        return {"ok": ok}
+
+    def _focus_set(self):
+        """Va à une position de focus absolue (champ numérique)."""
+        try:
+            position = int(request.args.get("position"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "position invalide"}, 400
+        ok = bool(self._on_set_focus and self._on_set_focus(position))
         return {"ok": ok}
 
     def _zoom_nudge(self):
