@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -188,10 +189,56 @@ def resolve_mac_settings(args: argparse.Namespace) -> dict:
     return {"batch": batch, "workers": workers, "imgsz": imgsz}
 
 
+def apply_gpu_power_limit(percent: int, gpu_index: str) -> None:
+    """Plafonne la puissance (watts) du GPU NVIDIA pour ménager une carte fatiguée.
+
+    Rappel : un GPU à 100 % d'utilisation pendant l'entraînement est NORMAL et
+    n'abîme rien en soi. Ce qui use une carte, c'est la puissance soutenue (watts)
+    et la température, plus les pics de courant. On plafonne donc les watts à
+    `percent` % de la limite par défaut (TDP) via `nvidia-smi -pl` : la temp et les
+    appels de puissance brutaux baissent, pour une perte de vitesse minime (~5-8 %).
+
+    `percent` <= 0 désactive. Échec silencieux (avec consigne) si pas les droits :
+    sous Windows, modifier la limite de puissance exige une console Administrateur.
+    """
+    if percent <= 0:
+        return
+    idx = gpu_index if gpu_index.isdigit() else "0"
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "-i", idx, "--format=csv,noheader,nounits",
+             "--query-gpu=power.default_limit,power.min_limit,power.max_limit"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        default_w, min_w, max_w = (float(x) for x in out.split(","))
+    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+        print(f"==> Limite de puissance non appliquée (lecture nvidia-smi KO) : {exc}")
+        return
+
+    target = round(default_w * percent / 100.0)
+    target = max(int(min_w), min(target, int(max_w)))  # borné au domaine autorisé
+    try:
+        subprocess.run(["nvidia-smi", "-i", idx, "-pl", str(target)],
+                       capture_output=True, text=True, check=True)
+        print(f"==> Limite de puissance GPU : {target} W "
+              f"({percent} % du TDP {default_w:.0f} W) — temp et pics de conso réduits.")
+        print(f"    Pour rétablir le défaut plus tard : nvidia-smi -i {idx} -pl {default_w:.0f}")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        print("==> Impossible de fixer la limite de puissance (droits admin requis "
+              "sous Windows).")
+        print(f"    Lance UNE fois dans un terminal Administrateur :  "
+              f"nvidia-smi -i {idx} -pl {target}")
+        print(f"    (détail : {detail.strip()})")
+
+
 def train(ds_root: Path, args: argparse.Namespace) -> None:
     from ultralytics import YOLO
 
     device = resolve_device(args.device)
+
+    if device.isdigit():  # GPU NVIDIA (CUDA) uniquement — pas de pl sur MPS/CPU
+        apply_gpu_power_limit(args.power_limit, device)
 
     if device == "mps":
         cfg = resolve_mac_settings(args)
@@ -247,6 +294,11 @@ def main() -> None:
                              "Si OOM/gel sur Mac, baisse (ex. --batch 24).")
     parser.add_argument("--device", default="auto",
                         help="auto (défaut : cuda > mps > cpu), '0' (GPU NVIDIA), 'mps', 'cpu'.")
+    parser.add_argument("--power-limit", type=int, default=75,
+                        help="GPU NVIDIA : plafonne la puissance à ce %% du TDP pour "
+                             "ménager la carte (temp + pics de conso). 75 = défaut "
+                             "(~262 W sur RTX 3090). 0/100 = désactive (pleine puissance). "
+                             "Modifier la limite exige un terminal Administrateur sous Windows.")
     parser.add_argument("--workers", type=int, default=-1,
                         help="Threads dataloader (-1 = tous les cœurs CPU). Mac M3 = 8.")
     parser.add_argument("--cache", default="disk", choices=["disk", "ram", "False"],

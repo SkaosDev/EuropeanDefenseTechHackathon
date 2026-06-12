@@ -1,6 +1,13 @@
 # Dépendances pour l'entraînement (machine GPU, pas le Pi).
-# Installer une build CUDA de torch si pip n'en choisit pas une automatiquement :
-#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#
+# IMPORTANT : par défaut pip installe torch en build CPU (+cpu) -> CUDA indispo, GPU
+# inutilisé. Installer la build CUDA AVANT le reste. torch 2.12.0 n'existe qu'en
+# CUDA 13.0 (cu130) ; adapter le tag à ta version de torch / ton driver si besoin :
+#   pip install --index-url https://download.pytorch.org/whl/cu130 \
+#       torch==2.12.0+cu130 torchvision==0.27.0+cu130
+# Le suffixe +cu130 est obligatoire : sans lui, pip considère un +cpu déjà présent
+# comme « already satisfied » et ne remplace rien (ajouter --force-reinstall si besoin).
+# Vérifier :  python -c "import torch; print(torch.cuda.is_available())"  -> True
 ultralytics>=8.4.0
 roboflow>=1.1.0
 pyyaml>=6.0
