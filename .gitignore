@@ -22,6 +22,9 @@ venv/
 env/
 ENV/
 
+# --- Node / frontend ---
+node_modules/
+
 # --- IDE / éditeurs ---
 .idea/
 .vscode/

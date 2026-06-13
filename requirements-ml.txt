@@ -1,0 +1,12 @@
+# ML + backend dependencies for the model/ and backend/ layers.
+# Install into a fresh venv on stable Python 3.13:
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements-ml.txt
+# dataset_generator/ is pure-Python (numpy/pandas/pyyaml/folium) and imports fine here.
+numpy>=1.24
+pandas>=2.0
+pyyaml>=6.0
+folium>=0.15
+torch>=2.2
+fastapi>=0.110
+uvicorn[standard]>=0.29
+websockets>=12.0
