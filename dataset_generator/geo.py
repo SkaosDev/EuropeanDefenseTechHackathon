@@ -169,3 +169,39 @@ def in_bbox(lat: float, lon: float, bbox: dict) -> bool:
         bbox["lat_min"] <= lat <= bbox["lat_max"]
         and bbox["lon_min"] <= lon <= bbox["lon_max"]
     )
+
+
+# --------------------------------------------------------------------------- #
+#  Point-in-polygon (clip des capteurs au territoire)                          #
+# --------------------------------------------------------------------------- #
+def _point_in_ring(x, y, ring):
+    """Ray-casting : (x=lon, y=lat) dans l'anneau [(lon,lat), ...] ?"""
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i][0], ring[i][1]
+        xj, yj = ring[j][0], ring[j][1]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def point_in_geojson(lat, lon, geom) -> bool:
+    """Point (lat, lon) dans une géométrie GeoJSON Polygon/MultiPolygon (coords [lon,lat])."""
+    t = geom["type"]
+    polys = geom["coordinates"] if t == "MultiPolygon" else [geom["coordinates"]]
+    for poly in polys:
+        ext = poly[0]
+        if _point_in_ring(lon, lat, ext):
+            if not any(_point_in_ring(lon, lat, hole) for hole in poly[1:]):
+                return True
+    return False
+
+
+def load_geojson_geometry(path):
+    """Charge une géométrie GeoJSON {type, coordinates} depuis un fichier."""
+    import json
+    with open(path) as f:
+        return json.load(f)

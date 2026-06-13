@@ -1,29 +1,31 @@
 # ============================================================================
-#  Simulateur de dataset counter-UAS — configuration centrale.
-#  Toutes les constantes ajustables sont ici (aucun magic number dans le code).
+#  Simulateur de dataset counter-UAS — configuration centrale (v2, réaliste).
+#  Coordonnées : WGS-84 degrés décimaux. Sources : OSINT public (ISW, ACLED,
+#  Defense Express, militarnyi, air-alarms.in.ua, OHCHR). Usage DÉFENSIF uniquement.
 #
-#  Coordonnées : WGS-84 degrés décimaux. Sources : OSINT public (ISW, Defense
-#  Express, militarnyi, Wikipedia/Wikidata/OSM). Usage DÉFENSIF uniquement.
+#  v2 : 28 cibles curées + priors de ciblage basés sur données réelles (priority +
+#  affinité classe×zone), capteurs réalistes (acoustique/optique/RF/DAS/observateur,
+#  PAS de vibration), placement clippé au territoire ukrainien.
 # ============================================================================
 
-# --- Paramètres de simulation (surchargés par la CLI : main.py --help) -------
 sim:
-  seed: 42                 # graine RNG -> reproductibilité
-  n_drones: 2000           # nombre de trajectoires à générer
-  dt_s: 10                 # pas de temps de l'intégrateur cinématique (secondes)
-  max_steps: 2400          # garde-fou : ~6h40 à dt=10s (~1200 km) -> couvre la portée Shahed
-  reach_radius_m: 1500     # cible considérée atteinte sous ce rayon
+  seed: 42
+  n_drones: 2000
+  dt_s: 10
+  max_steps: 2400
+  reach_radius_m: 1500
 
-# --- Emprise géographique (Ukraine + marge) ---------------------------------
-ukraine_bbox:              # sert au placement des capteurs et à la normalisation
+ukraine_bbox:
   lat_min: 44.0
   lat_max: 53.0
   lon_min: 22.0
   lon_max: 40.5
 
+# Frontière ukrainienne (polygone) pour clipper les capteurs au territoire.
+ua_border_file: ua_border.json
+
 # ============================================================================
-#  1.A — SITES DE LANCEMENT (origines longue portée). `prefers` = oblasts visés
-#        (OSINT directionnel) ; `weight` = fréquence relative de lancement.
+#  1.A — SITES DE LANCEMENT (origines longue portée).
 # ============================================================================
 origins:
   - {name: "Tsymbulova",          region: "Oryol (RU)",     lat: 53.3647, lon: 35.8222, weight: 1.4, prefers: [Kyiv, Sumy, Kharkiv, Chernihiv, Poltava]}
@@ -38,132 +40,88 @@ origins:
   - {name: "Millerovo",           region: "Rostov (RU)",    lat: 48.9522, lon: 40.3022, weight: 0.9, prefers: [Zaporizhzhia, Dnipropetrovsk, Donetsk]}
   - {name: "Korenovsk",           region: "Krasnodar (RU)", lat: 45.4461, lon: 39.4217, weight: 1.0, prefers: [Odesa, Kherson, Zaporizhzhia, Mykolaiv]}
   - {name: "Shakhty",             region: "Rostov (RU)",    lat: 47.7085, lon: 40.2154, weight: 0.7, prefers: [Zaporizhzhia, Dnipropetrovsk, Donetsk]}
-  # Alabuga/Yelabuga (55.8214, 52.0482) = USINE de production (1300 km), volontairement EXCLUE des origines.
 
 # ============================================================================
-#  1.B — CIBLES (zones sensibles UA). dest_id assigné à l'ordre de chargement.
-#        zone_type pilote la valeur-cible (routing.zone_type_weight) + l'objectif.
+#  1.B — CIBLES (28 sites curés). `priority` = intensité de ciblage RÉELLE par
+#        oblast (+ ajustement site), source en commentaire. dest_id = ordre.
+#        Bases : ACLED 2024 (Kharkiv > ... > Sumy), air-alarms.in.ua (Kharkiv #1,
+#        Sumy #2 ~1560), comptages Kharkiv 728/an & Kherson ~8000/an, OHCHR.
 # ============================================================================
 targets:
-  # --- Villes / centres de population (city) ---
-  - {name: "Kyiv",          oblast: Kyiv,            zone_type: city, lat: 50.4501, lon: 30.5234, pop: 3109000}
-  - {name: "Kharkiv",       oblast: Kharkiv,         zone_type: city, lat: 50.0028, lon: 36.2304, pop: 1444000}
-  - {name: "Odesa",         oblast: Odesa,           zone_type: city, lat: 46.4858, lon: 30.7326, pop: 1010000}
-  - {name: "Dnipro",        oblast: Dnipropetrovsk,  zone_type: city, lat: 48.4684, lon: 35.0425, pop: 933000}
-  - {name: "Zaporijjia",    oblast: Zaporizhzhia,    zone_type: city, lat: 47.8388, lon: 35.1846, pop: 721000}
-  - {name: "Lviv",          oblast: Lviv,            zone_type: city, lat: 49.8397, lon: 24.0297, pop: 717000}
-  - {name: "Kryvyi Rih",    oblast: Dnipropetrovsk,  zone_type: city, lat: 47.9095, lon: 33.3804, pop: 600000}
-  - {name: "Mykolaiv",      oblast: Mykolaiv,        zone_type: city, lat: 46.9748, lon: 31.9948, pop: 476000}
-  - {name: "Vinnytsia",     oblast: Vinnytsia,       zone_type: city, lat: 49.2328, lon: 28.4682, pop: 371000}
-  - {name: "Poltava",       oblast: Poltava,         zone_type: city, lat: 49.5883, lon: 34.5514, pop: 318000}
-  - {name: "Chernihiv",     oblast: Chernihiv,       zone_type: city, lat: 51.4982, lon: 31.2893, pop: 296000}
-  - {name: "Sumy",          oblast: Sumy,            zone_type: city, lat: 50.9216, lon: 34.8003, pop: 286000}
-  - {name: "Kherson",       oblast: Kherson,         zone_type: city, lat: 46.6350, lon: 32.6167, pop: 283000}
-  - {name: "Cherkasy",      oblast: Cherkasy,        zone_type: city, lat: 49.4270, lon: 32.0624, pop: 281000}
-  - {name: "Khmelnytskyi",  oblast: Khmelnytskyi,    zone_type: city, lat: 49.4144, lon: 26.9910, pop: 271000}
-  - {name: "Zhytomyr",      oblast: Zhytomyr,        zone_type: city, lat: 50.2547, lon: 28.6587, pop: 266000}
-  - {name: "Rivne",         oblast: Rivne,           zone_type: city, lat: 50.6199, lon: 26.2315, pop: 245000}
-  - {name: "Chernivtsi",    oblast: Chernivtsi,      zone_type: city, lat: 48.2912, lon: 25.9447, pop: 240000}
-  - {name: "Ivano-Frankivsk", oblast: Ivano-Frankivsk, zone_type: city, lat: 48.9226, lon: 24.7090, pop: 237000}
-  - {name: "Kremenchuk",    oblast: Poltava,         zone_type: city, lat: 49.0605, lon: 33.4161, pop: 217000}
-  - {name: "Lutsk",         oblast: Volyn,           zone_type: city, lat: 50.7472, lon: 25.3445, pop: 218000}
-  - {name: "Kamianske",     oblast: Dnipropetrovsk,  zone_type: city, lat: 48.5219, lon: 34.6147, pop: 227000}
-  - {name: "Ternopil",      oblast: Ternopil,        zone_type: city, lat: 49.5535, lon: 25.5948, pop: 225000}
-  - {name: "Kropyvnytskyi", oblast: Kirovohrad,      zone_type: city, lat: 48.5079, lon: 32.2623, pop: 228000}
-  - {name: "Uzhhorod",      oblast: Zakarpattia,     zone_type: city, lat: 48.6208, lon: 22.2879, pop: 115000}
+  # --- Villes principales (12) ---
+  - {name: "Kyiv",        oblast: Kyiv,           zone_type: city, lat: 50.4501, lon: 30.5234, pop: 3109000, priority: 2.2}  # capitale, cible profonde n°1
+  - {name: "Kharkiv",     oblast: Kharkiv,        zone_type: city, lat: 50.0028, lon: 36.2304, pop: 1444000, priority: 3.0}  # oblast le + frappé (ACLED/alertes)
+  - {name: "Odesa",       oblast: Odesa,          zone_type: city, lat: 46.4858, lon: 30.7326, pop: 1010000, priority: 1.6}  # campagne Mer Noire
+  - {name: "Dnipro",      oblast: Dnipropetrovsk, zone_type: city, lat: 48.4684, lon: 35.0425, pop: 933000,  priority: 2.0}  # front, ACLED haut
+  - {name: "Zaporijjia",  oblast: Zaporizhzhia,   zone_type: city, lat: 47.8388, lon: 35.1846, pop: 721000,  priority: 2.2}  # front
+  - {name: "Lviv",        oblast: Lviv,           zone_type: city, lat: 49.8397, lon: 24.0297, pop: 717000,  priority: 0.8}  # ouest, frappes périodiques
+  - {name: "Kryvyi Rih",  oblast: Dnipropetrovsk, zone_type: city, lat: 47.9095, lon: 33.3804, pop: 600000,  priority: 1.5}
+  - {name: "Mykolaiv",    oblast: Mykolaiv,       zone_type: city, lat: 46.9748, lon: 31.9948, pop: 476000,  priority: 1.4}
+  - {name: "Vinnytsia",   oblast: Vinnytsia,      zone_type: city, lat: 49.2328, lon: 28.4682, pop: 371000,  priority: 0.9}
+  - {name: "Poltava",     oblast: Poltava,        zone_type: city, lat: 49.5883, lon: 34.5514, pop: 318000,  priority: 1.2}
+  - {name: "Sumy",        oblast: Sumy,           zone_type: city, lat: 50.9216, lon: 34.8003, pop: 286000,  priority: 2.0}  # alertes #2 (1560/2024)
+  - {name: "Kherson",     oblast: Kherson,        zone_type: city, lat: 46.6350, lon: 32.6167, pop: 283000,  priority: 2.6}  # ~8000 attaques/2024
 
-  # --- Centrales thermiques (power_tpp) ---
-  - {name: "Burshtyn TPP",      oblast: Ivano-Frankivsk, zone_type: power_tpp, lat: 49.2104, lon: 24.6665}
-  - {name: "Ladyzhyn TPP",      oblast: Vinnytsia,       zone_type: power_tpp, lat: 48.7060, lon: 29.2202}
-  - {name: "Trypillia TPP",     oblast: Kyiv,            zone_type: power_tpp, lat: 50.1351, lon: 30.7481}
-  - {name: "Zmiiv TPP",         oblast: Kharkiv,         zone_type: power_tpp, lat: 49.5850, lon: 36.5250}
-  - {name: "Kryvyi Rih TPP",    oblast: Dnipropetrovsk,  zone_type: power_tpp, lat: 47.5392, lon: 33.6619}
-  - {name: "Prydniprovska TPP", oblast: Dnipropetrovsk,  zone_type: power_tpp, lat: 48.4051, lon: 35.1131}
-  - {name: "Dobrotvir TPP",     oblast: Lviv,            zone_type: power_tpp, lat: 50.2133, lon: 24.3750}
-  - {name: "Zaporizhzhia TPP",  oblast: Zaporizhzhia,    zone_type: power_tpp, lat: 47.5086, lon: 34.6256}
-  - {name: "Kurakhove TPP",     oblast: Donetsk,         zone_type: power_tpp, lat: 47.9954, lon: 37.2371}
+  # --- Centrales nucléaires (4) : rarement frappées directement -> priorité basse ---
+  - {name: "Zaporizhzhia NPP",  oblast: Zaporizhzhia, zone_type: power_npp, lat: 47.5167, lon: 34.6167, priority: 0.3}  # occupée
+  - {name: "South Ukraine NPP", oblast: Mykolaiv,     zone_type: power_npp, lat: 47.8167, lon: 31.2167, priority: 0.6}
+  - {name: "Rivne NPP",         oblast: Rivne,        zone_type: power_npp, lat: 51.3278, lon: 25.8917, priority: 0.5}
+  - {name: "Khmelnytskyi NPP",  oblast: Khmelnytskyi, zone_type: power_npp, lat: 50.3014, lon: 26.6497, priority: 0.5}
 
-  # --- Hydroélectrique (power_hpp) ---
-  - {name: "DniproHES",         oblast: Zaporizhzhia,    zone_type: power_hpp, lat: 47.7500, lon: 34.8000}
-  - {name: "Kremenchuk HPP",    oblast: Poltava,         zone_type: power_hpp, lat: 49.0775, lon: 33.2506}
-  - {name: "Kaniv HPP",         oblast: Cherkasy,        zone_type: power_hpp, lat: 49.7665, lon: 31.4717}
-  - {name: "Kyiv HPP",          oblast: Kyiv,            zone_type: power_hpp, lat: 50.5883, lon: 30.5123}
-  - {name: "Dniester HPP",      oblast: Chernivtsi,      zone_type: power_hpp, lat: 48.5933, lon: 27.4550}
+  # --- Bases aériennes (5) : cibles privilégiées des Lancet/missiles ---
+  - {name: "Starokostiantyniv AB", oblast: Khmelnytskyi, zone_type: airbase, lat: 49.8500, lon: 26.5670, priority: 1.6}  # base F-16, très visée
+  - {name: "Myrhorod AB",       oblast: Poltava,         zone_type: airbase, lat: 49.9317, lon: 33.6394, priority: 1.3}
+  - {name: "Vasylkiv AB",       oblast: Kyiv,            zone_type: airbase, lat: 50.2333, lon: 30.3000, priority: 1.2}
+  - {name: "Ozerne AB",         oblast: Zhytomyr,        zone_type: airbase, lat: 50.1583, lon: 28.7383, priority: 1.0}
+  - {name: "Kulbakino AB",      oblast: Mykolaiv,        zone_type: airbase, lat: 46.9419, lon: 32.0972, priority: 1.2}
 
-  # --- Nucléaire (power_npp) ---
-  - {name: "Zaporizhzhia NPP",  oblast: Zaporizhzhia,    zone_type: power_npp, lat: 47.5167, lon: 34.6167}
-  - {name: "South Ukraine NPP", oblast: Mykolaiv,        zone_type: power_npp, lat: 47.8167, lon: 31.2167}
-  - {name: "Rivne NPP",         oblast: Rivne,           zone_type: power_npp, lat: 51.3278, lon: 25.8917}
-  - {name: "Khmelnytskyi NPP",  oblast: Khmelnytskyi,    zone_type: power_npp, lat: 50.3014, lon: 26.6497}
+  # --- Ports (3) : campagne Mer Noire / Danube ---
+  - {name: "Pivdennyi port",    oblast: Odesa, zone_type: port, lat: 46.6300, lon: 31.0150, priority: 1.4}
+  - {name: "Chornomorsk port",  oblast: Odesa, zone_type: port, lat: 46.3019, lon: 30.6564, priority: 1.3}
+  - {name: "Izmail port",       oblast: Odesa, zone_type: port, lat: 45.3461, lon: 28.8369, priority: 1.3}  # Danube, très frappé
 
-  # --- Bases aériennes militaires (airbase) ---
-  - {name: "Starokostiantyniv AB", oblast: Khmelnytskyi, zone_type: airbase, lat: 49.8500, lon: 26.5670}
-  - {name: "Vasylkiv AB",       oblast: Kyiv,            zone_type: airbase, lat: 50.2333, lon: 30.3000}
-  - {name: "Myrhorod AB",       oblast: Poltava,         zone_type: airbase, lat: 49.9317, lon: 33.6394}
-  - {name: "Kanatovo AB",       oblast: Kirovohrad,      zone_type: airbase, lat: 48.3590, lon: 32.1210}
-  - {name: "Pryluky AB",        oblast: Chernihiv,       zone_type: airbase, lat: 50.5667, lon: 32.3167}
-  - {name: "Kolomyia AB",       oblast: Ivano-Frankivsk, zone_type: airbase, lat: 48.5286, lon: 25.1264}
-  - {name: "Ozerne AB",         oblast: Zhytomyr,        zone_type: airbase, lat: 50.1583, lon: 28.7383}
-  - {name: "Kulbakino AB",      oblast: Mykolaiv,        zone_type: airbase, lat: 46.9419, lon: 32.0972}
-  - {name: "Dolhyntseve AB",    oblast: Dnipropetrovsk,  zone_type: airbase, lat: 47.8886, lon: 33.5342}
-  - {name: "Ivano-Frankivsk AB", oblast: Ivano-Frankivsk, zone_type: airbase, lat: 48.8843, lon: 24.6862}
-  - {name: "Lutsk AB",          oblast: Volyn,           zone_type: airbase, lat: 50.6800, lon: 25.4900}
+  # --- Industrie de défense (4) ---
+  - {name: "Pivdenmash",        oblast: Dnipropetrovsk, zone_type: defense_industry, lat: 48.4630, lon: 35.0850, priority: 1.6}  # frappe ICBM nov.2024
+  - {name: "Motor Sich",        oblast: Zaporizhzhia,   zone_type: defense_industry, lat: 47.8422, lon: 35.2092, priority: 1.4}
+  - {name: "Antonov/Hostomel",  oblast: Kyiv,           zone_type: defense_industry, lat: 50.6038, lon: 30.1919, priority: 1.2}
+  - {name: "Artem",             oblast: Kyiv,           zone_type: defense_industry, lat: 50.4869, lon: 30.4456, priority: 1.1}
 
-  # --- Ports stratégiques (port) ---
-  - {name: "Odesa port",        oblast: Odesa,           zone_type: port, lat: 46.4858, lon: 30.7326}
-  - {name: "Pivdennyi port",    oblast: Odesa,           zone_type: port, lat: 46.6300, lon: 31.0150}
-  - {name: "Chornomorsk port",  oblast: Odesa,           zone_type: port, lat: 46.3019, lon: 30.6564}
-  - {name: "Mykolaiv port",     oblast: Mykolaiv,        zone_type: port, lat: 46.9580, lon: 31.9870}
-  - {name: "Izmail port",       oblast: Odesa,           zone_type: port, lat: 45.3461, lon: 28.8369}
-  - {name: "Reni port",         oblast: Odesa,           zone_type: port, lat: 45.4575, lon: 28.2789}
-
-  # --- Industrie de défense (defense_industry) ---
-  - {name: "Pivdenmash",        oblast: Dnipropetrovsk,  zone_type: defense_industry, lat: 48.4630, lon: 35.0850}
-  - {name: "Motor Sich",        oblast: Zaporizhzhia,    zone_type: defense_industry, lat: 47.8422, lon: 35.2092}
-  - {name: "Ivchenko-Progress", oblast: Zaporizhzhia,    zone_type: defense_industry, lat: 47.8550, lon: 35.2031}
-  - {name: "Antonov/Hostomel",  oblast: Kyiv,            zone_type: defense_industry, lat: 50.6038, lon: 30.1919}
-  - {name: "Artem",             oblast: Kyiv,            zone_type: defense_industry, lat: 50.4869, lon: 30.4456}
-
-# Objectif de haut niveau dérivé du zone_type (métadonnée de label).
 objective_by_zone_type:
   city: population
-  power_tpp: energy
-  power_hpp: energy
   power_npp: energy
   airbase: military
   port: logistics
   defense_industry: industry
 
 # ============================================================================
-#  2 — CLASSES DE DRONES : enveloppe cinématique + signatures par modalité.
-#      `emission` (0..1) module la PORTÉE EFFECTIVE des capteurs (cf. §3).
-#      `origin_mode`: hub = part d'un site §1.A ; forward = point avancé près du front.
+#  2 — CLASSES DE DRONES. `emission` (0..1) module la portée effective des
+#      capteurs. observer = détectabilité par l'humain (vue/ouïe).
 # ============================================================================
 drone_classes:
   shahed136:
     label: "Shahed-136"
-    spawn_weight: 0.55          # majoritaire dans les vagues réelles
+    spawn_weight: 0.55
     speed_kmh: [165, 200]
     alt_m: [100, 2000]
     range_km: 1000
     origin_mode: hub
-    emission: {optical: 0.80, acoustic: 0.90, vibration: 0.30, das: 0.30, rf: 0.20}
+    emission: {acoustic: 0.90, optical: 0.80, rf: 0.20, das: 0.30, observer: 0.75}  # lent/bruyant/visible
   gerbera:
     label: "Gerbera (leurre)"
-    spawn_weight: 0.25          # leurres pour saturer la DCA
+    spawn_weight: 0.25
     speed_kmh: [120, 160]
     alt_m: [100, 2000]
     range_km: 500
     origin_mode: hub
-    emission: {optical: 0.40, acoustic: 0.45, vibration: 0.15, das: 0.15, rf: 0.15}
+    emission: {acoustic: 0.45, optical: 0.40, rf: 0.15, das: 0.15, observer: 0.50}
   fpv_fiber:
     label: "FPV fibre optique"
-    spawn_weight: 0.08          # tactique courte portée (près du front)
+    spawn_weight: 0.08
     speed_kmh: [90, 150]
-    alt_m: [5, 120]             # rase-terre
+    alt_m: [5, 120]
     range_km: 20
     origin_mode: forward
-    emission: {optical: 0.30, acoustic: 0.30, vibration: 0.10, das: 0.20, rf: 0.00}  # fibre = AUCUN RF
+    emission: {acoustic: 0.30, optical: 0.30, rf: 0.00, das: 0.20, observer: 0.20}  # fibre = AUCUN RF
   lancet:
     label: "Lancet"
     spawn_weight: 0.12
@@ -171,39 +129,34 @@ drone_classes:
     alt_m: [50, 1000]
     range_km: 60
     origin_mode: forward
-    emission: {optical: 0.40, acoustic: 0.50, vibration: 0.15, das: 0.15, rf: 0.50}  # datalink
+    emission: {acoustic: 0.50, optical: 0.40, rf: 0.50, das: 0.15, observer: 0.35}  # datalink
 
-# Oblasts de la zone de front : cibles autorisées pour les classes `forward`.
 front_oblasts: [Kharkiv, Donetsk, Zaporizhzhia, Kherson, Dnipropetrovsk, Mykolaiv, Sumy, Chernihiv]
 
 # ============================================================================
-#  3 — ROUTAGE (macro O-D + micro steering)
+#  3 — ROUTAGE. Poids O-D = priority(cible) × affinité(classe, type) × décroissance
+#      de distance (mode hub) ; la branche forward reste limitée aux oblasts de front.
 # ============================================================================
 routing:
-  # Valeur-cible relative par type de zone (pondère la matrice O-D).
-  zone_type_weight:
-    city: 1.0
-    power_tpp: 0.9
-    power_hpp: 0.7
-    power_npp: 0.5            # rarement frappé directement (postes alentour)
-    airbase: 0.8
-    port: 0.7
-    defense_industry: 0.8
-  prefer_boost: 2.5          # multiplicateur si l'oblast cible ∈ origin.prefers
+  # Affinité classe × type de zone (données réelles : Shahed→villes/ports/industrie ;
+  # Lancet→aviation/militaire ; FPV→front). Source : CSIS/ISIS/Defense Express.
+  class_zone_affinity:
+    shahed136: {city: 1.0, port: 0.9, defense_industry: 0.8, power_npp: 0.6, airbase: 0.5}
+    gerbera:   {city: 1.0, port: 0.9, defense_industry: 0.7, power_npp: 0.5, airbase: 0.5}
+    lancet:    {city: 0.5, port: 0.4, defense_industry: 0.8, power_npp: 0.3, airbase: 1.0}
+    fpv_fiber: {city: 0.7, port: 0.3, defense_industry: 0.5, power_npp: 0.2, airbase: 0.6}
+  prefer_boost: 2.0          # multiplicateur si l'oblast cible ∈ origin.prefers
   distance_scale_km: 350     # décroissance exp. de proba avec la distance origine->cible
-  range_margin: 1.15         # cible rejetée si dist > range_km * marge
-  # Micro-routing : steering behaviors
-  waypoint_reach_m: 6000     # rayon de validation d'un waypoint intermédiaire
-  n_midpoints: [0, 2]        # nb de waypoints latéraux aléatoires (variété de routes)
-  midpoint_offset_km: 40     # écart-type latéral des waypoints intermédiaires
-  seek_weight: 1.0           # poids du vecteur d'attraction vers le waypoint
-  avoid_weight: 1.6          # poids de la répulsion des zones DCA
-  # Zones de défense aérienne (DCA) à contourner : villes > seuil de population.
+  range_margin: 1.15
+  waypoint_reach_m: 6000
+  n_midpoints: [0, 2]
+  midpoint_offset_km: 40
+  seek_weight: 1.0
+  avoid_weight: 1.6
   dca:
     pop_threshold: 250000
-    radius_km: 28            # rayon de répulsion autour de la ville
-    influence_km: 55         # distance à laquelle la répulsion commence
-  # Corridor d'attraction optionnel (axe du Dnipro) — suivi probabiliste.
+    radius_km: 28
+    influence_km: 55
   corridor_follow_prob: 0.30
   corridor_weight: 0.6
   corridor_influence_km: 50
@@ -212,81 +165,89 @@ routing:
       polyline: [[51.50, 30.50], [50.59, 30.51], [49.77, 31.47], [49.08, 33.25], [48.47, 35.04], [47.84, 35.18], [47.52, 34.62]]
 
 # ============================================================================
-#  4 — CINÉMATIQUE (intégrateur trajectoire vérité-terrain)
+#  4 — CINÉMATIQUE
 # ============================================================================
 kinematics:
-  max_turn_rate_deg_s: 3.0   # cap de virage (rayon réaliste, pas de virage à 90° instantané)
-  speed_noise_frac: 0.05     # bruit gaussien relatif sur la vitesse
-  alt_noise_m: 15            # bruit gaussien sur l'altitude (suivi de terrain)
-  heading_jitter_deg: 1.5    # micro-bruit de cap par pas
+  max_turn_rate_deg_s: 3.0
+  speed_noise_frac: 0.05
+  alt_noise_m: 15
+  heading_jitter_deg: 1.5
 
 # ============================================================================
-#  5 — CAPTEURS (grille nationale) & génération d'événements
-#      `grid_km` : pas de la grille par modalité (plus petit = plus dense).
-#      `base_range_km` : portée à émission=1 ; portée effective = base * emission.
+#  5 — CAPTEURS (réalistes, clippés au territoire UA) & génération d'événements.
+#      4 modalités ponctuelles + DAS linéaire. PAS de vibration.
+#      `placement` : grid (grille clippée UA) | around_value (autour des sites à
+#      haute valeur + villes) | around_cities (zones peuplées, ∝ population).
 # ============================================================================
 sensors:
-  jitter_km: 8               # bruit de position des capteurs (grille imparfaite)
-  event_min_interval_s: 20   # un capteur ré-émet au plus tous les N s (borne le volume d'événements)
-  detection_stride: 2        # ne teste la détection qu'un pas sur N (= résolution event_min_interval) -> ~2x plus rapide
+  jitter_km: 6
+  event_min_interval_s: 20
+  detection_stride: 2
   modalities:
-    # optical gives_range=true : estimation de distance monoculaire (taille apparente, cf. tracker)
-    optical:    {grid_km: 32, base_range_km: 9.0,  base_pd: 0.90, falloff: 1.4, gives_bearing: true,  gives_range: true}
-    acoustic:   {grid_km: 36, base_range_km: 7.0,  base_pd: 0.85, falloff: 1.2, gives_bearing: true,  gives_range: false}
-    vibration:  {grid_km: 45, base_range_km: 0.8,  base_pd: 0.80, falloff: 1.0, gives_bearing: false, gives_range: false}
-    rf:         {grid_km: 55, base_range_km: 20.0, base_pd: 0.88, falloff: 1.6, gives_bearing: true,  gives_range: false}
-  # Fibre DAS : capteur linéaire. Détecte près de la ligne (portée transverse faible).
+    # Acoustique : Sky Fortress + Zvook (réseaux denses, ~24 000 capteurs réels). Chaque
+    # nœud sim ≈ un cluster local. Couvre tout le territoire peuplé -> accroche les drones
+    # (FPV fibre incluse). Source : united24media, army.mil, militarnyi.
+    acoustic:  {placement: grid, grid_km: 20, base_range_km: 9.0, base_pd: 0.90, falloff: 1.2, gives_bearing: true,  gives_range: false}
+    # Optique/IR : caméras + IA sur sites + large rayon + villes. Source : defence-blog.
+    optical:   {placement: around_value, radius_km: 45, per_site: 6, base_range_km: 9.0, base_pd: 0.90, falloff: 1.4, gives_bearing: true, gives_range: true}
+    # RF/EW : longue portée, frontière/front/villes ; AVEUGLE aux FPV fibre. Source : TWZ.
+    rf:        {placement: grid, grid_km: 45, base_range_km: 22.0, base_pd: 0.88, falloff: 1.6, gives_bearing: true, gives_range: false}
+    # Observateur : ePPO + groupes feu mobiles (zones peuplées). Relèvement seul. Source : Lieber/ePPO.
+    observer:  {placement: around_cities, radius_km: 28, per_100k_pop: 0.6, min_per_city: 2, base_range_km: 7.0, base_pd: 0.80, falloff: 1.0, gives_bearing: true, gives_range: false}
+  # Fibre DAS : réseau dense reliant la plupart des villes (+ antennes), dans le territoire.
   das:
-    base_range_km: 1.5        # distance transverse de détection à la ligne
+    base_range_km: 1.5
     base_pd: 0.75
     falloff: 1.0
     gives_bearing: false
     gives_range: false
-    lines:                    # tracés fibre (réutilisent les corridors + une ligne sud)
-      - [[51.50, 30.50], [50.59, 30.51], [49.08, 33.25], [48.47, 35.04], [47.84, 35.18]]
-      - [[46.49, 30.73], [46.97, 31.99], [46.64, 32.62], [47.84, 35.18]]
-  # Bruit d'estimation par modalité.
-  bearing_noise_deg: {optical: 4, acoustic: 10, rf: 8, vibration: 60, das: 60}
-  range_noise_frac: 0.35      # bruit relatif sur range_est (modalités qui le fournissent)
-  confidence_noise: 0.10      # bruit additif sur la confiance
-  # Faux positifs (clutter) : volume relatif au nb d'événements réels du scénario.
-  # n_clutter ~ Poisson(fp_ratio * n_evenements_reels). 0.4 => ~29% des événements sont des FP.
+    lines:
+      - [[49.8397, 24.0297], [49.5535, 25.5948], [49.4144, 26.9910], [49.2328, 28.4682], [50.2547, 28.6587], [50.4501, 30.5234]]  # ouest -> Kyiv
+      - [[50.4501, 30.5234], [49.5883, 34.5514], [50.0028, 36.2304]]                                                              # Kyiv-Poltava-Kharkiv
+      - [[50.4501, 30.5234], [49.4270, 32.0624], [49.0605, 33.4161], [48.4684, 35.0425], [47.8388, 35.1846]]                      # axe Dnipro
+      - [[48.4684, 35.0425], [47.9095, 33.3804], [46.9748, 31.9948], [46.4858, 30.7326]]                                          # Dnipro-sud
+      - [[46.4858, 30.7326], [46.9748, 31.9948], [46.6350, 32.6167]]                                                              # côte sud
+      - [[50.4501, 30.5234], [50.9216, 34.8003]]                                                                                  # Kyiv-Sumy
+      - [[50.9216, 34.8003], [50.0028, 36.2304]]                                                                                  # Sumy-Kharkiv (front)
+      - [[50.0028, 36.2304], [48.4684, 35.0425]]                                                                                  # Kharkiv-Dnipro
+  bearing_noise_deg: {optical: 4, acoustic: 10, rf: 8, observer: 15, das: 60}
+  range_noise_frac: 0.35
+  confidence_noise: 0.10
   fp_ratio: 0.4
-  # Matrices de confusion d'estimation de classe par modalité.
-  # Lignes = vraie classe ; colonnes = classe estimée. Ordre : [shahed136, gerbera, fpv_fiber, lancet].
+  # Matrices de confusion (lignes = vraie classe ; colonnes = [shahed136, gerbera, fpv_fiber, lancet]).
   confusion:
-    optical:                  # confond fortement Shahed/Gerbera (mousse vs corps)
+    optical:
       shahed136: [0.70, 0.22, 0.03, 0.05]
       gerbera:   [0.35, 0.55, 0.05, 0.05]
       fpv_fiber: [0.05, 0.05, 0.80, 0.10]
       lancet:    [0.10, 0.08, 0.12, 0.70]
-    acoustic:                 # sépare bien thermique (Shahed) vs électrique
+    acoustic:
       shahed136: [0.85, 0.10, 0.02, 0.03]
       gerbera:   [0.20, 0.70, 0.05, 0.05]
       fpv_fiber: [0.03, 0.05, 0.82, 0.10]
       lancet:    [0.06, 0.06, 0.18, 0.70]
-    vibration:                # peu discriminant
-      shahed136: [0.45, 0.30, 0.10, 0.15]
-      gerbera:   [0.30, 0.40, 0.15, 0.15]
-      fpv_fiber: [0.15, 0.15, 0.50, 0.20]
-      lancet:    [0.20, 0.20, 0.20, 0.40]
-    das:                      # peu discriminant
-      shahed136: [0.45, 0.30, 0.10, 0.15]
-      gerbera:   [0.30, 0.40, 0.15, 0.15]
-      fpv_fiber: [0.15, 0.15, 0.50, 0.20]
-      lancet:    [0.20, 0.20, 0.20, 0.40]
-    rf:                       # excellent sur émetteurs (Lancet) ; ne voit JAMAIS le FPV fibre
+    rf:
       shahed136: [0.78, 0.12, 0.00, 0.10]
       gerbera:   [0.25, 0.65, 0.00, 0.10]
-      fpv_fiber: [0.00, 0.00, 1.00, 0.00]   # non pertinent (émission RF nulle -> aucun événement)
+      fpv_fiber: [0.00, 0.00, 1.00, 0.00]
       lancet:    [0.08, 0.07, 0.00, 0.85]
+    das:
+      shahed136: [0.45, 0.30, 0.10, 0.15]
+      gerbera:   [0.30, 0.40, 0.15, 0.15]
+      fpv_fiber: [0.15, 0.15, 0.50, 0.20]
+      lancet:    [0.20, 0.20, 0.20, 0.40]
+    observer:                 # humain : identification de classe peu précise (diffuse)
+      shahed136: [0.55, 0.25, 0.05, 0.15]
+      gerbera:   [0.40, 0.40, 0.05, 0.15]
+      fpv_fiber: [0.10, 0.10, 0.55, 0.25]
+      lancet:    [0.20, 0.15, 0.15, 0.50]
 
 # ============================================================================
-#  6 — PRÉPARATION DES SÉQUENCES (sequence_prep.py) pour le LSTM multi-têtes
+#  6 — PRÉPARATION DES SÉQUENCES (LSTM multi-têtes)
 # ============================================================================
 sequence:
-  max_len: 64                 # longueur max de la séquence d'événements (padding/troncature)
-  observation_fractions: [0.25, 0.5, 0.75, 1.0]  # cutoffs d'observation -> data augmentation "alerte précoce"
-  n_future: 12                # nb de points de trajectoire future à prédire (tête trajectoire)
-  val_fraction: 0.2           # split train/val PAR DRONE (anti-fuite)
-  dt_norm_s: 600              # échelle de normalisation du temps (Δt / dt_norm)
+  max_len: 64
+  observation_fractions: [0.25, 0.5, 0.75, 1.0]
+  n_future: 12
+  val_fraction: 0.2
+  dt_norm_s: 600

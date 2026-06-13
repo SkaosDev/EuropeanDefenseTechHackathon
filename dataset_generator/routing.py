@@ -30,6 +30,7 @@ class Target:
     lon: float
     pop: int
     objective: str
+    priority: float = 1.0    # intensité de ciblage réelle (cf. config, données OSINT)
 
 
 @dataclass
@@ -55,6 +56,7 @@ def build_targets(cfg: dict) -> list:
                 lon=float(t["lon"]),
                 pop=int(t.get("pop", 0)),
                 objective=obj_map[t["zone_type"]],
+                priority=float(t.get("priority", 1.0)),
             )
         )
     return targets
@@ -82,19 +84,24 @@ def _sample_origin(rng, origins: list):
 
 
 def _target_weights(origin, targets, dc, cfg):
-    """Poids O-D d'une origine HUB vers chaque cible (0 si hors de portée)."""
+    """Poids O-D d'une origine HUB vers chaque cible (0 si hors de portée).
+
+    Poids = priorité réelle de la cible × affinité(classe, type de zone) × décroissance
+    de distance × boost directionnel. La priorité encode l'intensité de ciblage observée
+    (données OSINT) ; l'affinité encode ce que cette classe de drone vise réellement.
+    """
     r = cfg["routing"]
     scale_km = r["distance_scale_km"]
     max_km = dc.range_km * r["range_margin"]
     prefers = set(origin.get("prefers", []))
-    ztw = r["zone_type_weight"]
+    aff = r["class_zone_affinity"][dc.name]
     w = np.zeros(len(targets))
     for i, t in enumerate(targets):
         dist_km = geo.distance_m(origin["lat"], origin["lon"], t.lat, t.lon) / 1000.0
         if dist_km > max_km:
             continue
         boost = r["prefer_boost"] if t.oblast in prefers else 1.0
-        w[i] = ztw[t.zone_type] * np.exp(-dist_km / scale_km) * boost
+        w[i] = t.priority * aff.get(t.zone_type, 0.5) * np.exp(-dist_km / scale_km) * boost
     return w
 
 
@@ -118,9 +125,9 @@ def choose_od(rng, dc, origins, targets, cfg):
 
     # mode forward : cible dans un oblast de front, origine = point avancé côté ennemi
     front = set(cfg["front_oblasts"])
-    ztw = cfg["routing"]["zone_type_weight"]
+    aff = cfg["routing"]["class_zone_affinity"][dc.name]
     cand = [t for t in targets if t.oblast in front]
-    w = np.array([ztw[t.zone_type] for t in cand], dtype=float)
+    w = np.array([t.priority * aff.get(t.zone_type, 0.5) for t in cand], dtype=float)
     tgt = cand[rng.choice(len(cand), p=w / w.sum())]
     # cap depuis la cible vers le hub réel le plus proche -> direction "front"
     hub = min(origins, key=lambda o: geo.distance_m(tgt.lat, tgt.lon, o["lat"], o["lon"]))

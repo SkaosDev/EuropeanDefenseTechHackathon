@@ -17,6 +17,7 @@ naturellement aux capteurs courte portée (vibration/DAS).
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -24,7 +25,7 @@ import numpy as np
 from . import geo
 from .drone_classes import CLASS_ORDER
 
-MODALITY_ORDER = ["optical", "acoustic", "vibration", "das", "rf"]
+MODALITY_ORDER = ["acoustic", "optical", "rf", "das", "observer"]
 
 
 @dataclass
@@ -70,15 +71,63 @@ def _grid_points(bbox, grid_km, jitter_km, rng):
     return glat + jit_lat, glon + jit_lon
 
 
-def build_network(cfg: dict, rng) -> SensorNetwork:
-    """Construit le réseau de capteurs depuis la config."""
-    bbox = cfg["ukraine_bbox"]
+def _scatter(centers_counts, radius_km, rng):
+    """Disperse des capteurs dans un disque autour de chaque centre.
+
+    centers_counts : liste de ((lat, lon), n). Renvoie (lats, lons)."""
+    lats, lons = [], []
+    for (clat, clon), n in centers_counts:
+        for _ in range(int(n)):
+            ang = rng.uniform(0, 360.0)
+            dist = radius_km * 1000.0 * np.sqrt(rng.random())   # uniforme dans le disque
+            la, lo = geo.destination_point(clat, clon, ang, dist)
+            lats.append(la)
+            lons.append(lo)
+    return np.array(lats), np.array(lons)
+
+
+def _ua_geometry(cfg):
+    """Charge le polygone du territoire ukrainien (clip des capteurs)."""
+    path = cfg.get("ua_border_file")
+    if not path:
+        return None
+    if not os.path.isabs(path):
+        path = os.path.join(os.path.dirname(__file__), path)
+    try:
+        return geo.load_geojson_geometry(path)
+    except OSError:
+        return None
+
+
+def _place(mod, m, cfg, targets, rng):
+    """Place les capteurs ponctuels d'une modalité selon sa stratégie."""
+    placement = m["placement"]
+    if placement == "grid":
+        return _grid_points(cfg["ukraine_bbox"], m["grid_km"], cfg["sensors"]["jitter_km"], rng)
+    if placement == "around_value":
+        cc = [((t.lat, t.lon), m["per_site"]) for t in targets]
+        return _scatter(cc, m["radius_km"], rng)
+    if placement == "around_cities":
+        cc = []
+        for t in targets:
+            if t.zone_type == "city":
+                n = max(m["min_per_city"], round(m["per_100k_pop"] * t.pop / 100000.0))
+                cc.append(((t.lat, t.lon), n))
+        return _scatter(cc, m["radius_km"], rng)
+    raise ValueError(f"placement inconnu : {placement}")
+
+
+def build_network(cfg: dict, rng, targets) -> SensorNetwork:
+    """Construit le réseau de capteurs (placement réaliste, clippé au territoire UA)."""
     s = cfg["sensors"]
+    geom = _ua_geometry(cfg)
     point = {}
     records = []
-    for mod in ["optical", "acoustic", "vibration", "rf"]:
-        m = s["modalities"][mod]
-        lats, lons = _grid_points(bbox, m["grid_km"], s["jitter_km"], rng)
+    for mod, m in s["modalities"].items():
+        lats, lons = _place(mod, m, cfg, targets, rng)
+        if geom is not None:                       # clip au territoire ukrainien
+            keep = np.array([geo.point_in_geojson(la, lo, geom) for la, lo in zip(lats, lons)])
+            lats, lons = lats[keep], lons[keep]
         ids = [f"{mod[:3]}_{i}" for i in range(len(lats))]
         point[mod] = PointSensors(
             modality=mod, ids=ids, lats=lats, lons=lons,
@@ -230,14 +279,19 @@ def simulate_events(rng, traj, dc, net: SensorNetwork, cfg: dict, drone_id: int)
 
     # --- faux positifs (clutter) : non liés au drone (drone_id=null) ---
     # Volume proportionnel au nb d'événements réels -> ratio FP contrôlé et réaliste.
+    # Le clutter est cantonné à la FENÊTRE de détection réelle [premier, dernier event réel] :
+    # tant que le drone n'est pas détecté sur le territoire, AUCUN événement (donc aucune
+    # prédiction) ne survient — conforme au fonctionnement réel.
+    real_times = [e["t"] for e in events]
     n_clutter = int(rng.poisson(s["fp_ratio"] * len(events)))
-    if n_clutter > 0 and len(net.all_point_records) > 0:
+    if n_clutter > 0 and len(net.all_point_records) > 0 and real_times:
+        t_lo, t_hi = min(real_times), max(real_times)
         recs = net.all_point_records
         for _ in range(n_clutter):
             rec = recs[rng.integers(len(recs))]
             mod = rec["modality"]
             events.append({
-                "t": float(rng.uniform(tt.min(), tt.max())),
+                "t": float(rng.uniform(t_lo, t_hi)),
                 "drone_id": None,
                 "sensor_id": rec["sensor_id"],
                 "sensor_lat": rec["lat"],

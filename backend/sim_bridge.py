@@ -40,13 +40,14 @@ def load_world():
                 with open(CONFIG) as f:
                     cfg = yaml.safe_load(f)
                 rng = np.random.default_rng(WORLD_SEED)
+                targets = routing.build_targets(cfg)
                 _world = {
                     "cfg": cfg,
                     "classes": load_drone_classes(cfg),
                     "origins": cfg["origins"],
-                    "targets": routing.build_targets(cfg),
-                    "dca": routing.build_dca_zones(cfg, routing.build_targets(cfg)),
-                    "net": sensors.build_network(cfg, rng),
+                    "targets": targets,
+                    "dca": routing.build_dca_zones(cfg, targets),
+                    "net": sensors.build_network(cfg, rng, targets),
                 }
     return _world
 

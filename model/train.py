@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import shutil
+import time
 
 import numpy as np
 import torch
@@ -78,7 +79,10 @@ def evaluate(model, loader, bbox):
 
 
 def train(out_dir=DEFAULT_OUT, epochs=50, batch=128, lr=1e-3, lam=0.2,
-          seed=0, log=print):
+          seed=0, log=None):
+    # logger qui FLUSH à chaque ligne (sinon les logs sont bufferisés quand stdout est
+    # redirigé vers un fichier -> on croit à tort que l'entraînement est figé).
+    log = log or (lambda *a: print(*a, flush=True))
     torch.manual_seed(seed)
     d = np.load(os.path.join(out_dir, "sequences.npz"))
     meta = json.load(open(os.path.join(out_dir, "dataset_meta.json")))
@@ -95,7 +99,7 @@ def train(out_dir=DEFAULT_OUT, epochs=50, batch=128, lr=1e-3, lam=0.2,
     log(f"[train] {int(tr.sum())} train / {int(va.sum())} val  "
         f"| targets={n_targets} classes={n_classes} future={n_future}")
 
-    arch = dict(n_feat=n_feat, proj=64, hidden=128, n_layers=2, bidir=False,
+    arch = dict(n_feat=n_feat, proj=64, hidden=128, n_layers=3, bidir=False,
                 n_targets=n_targets, n_classes=n_classes, n_future=n_future,
                 dropout=0.3, lstm_dropout=0.2)
     model = DroneNet(**arch)
@@ -107,10 +111,13 @@ def train(out_dir=DEFAULT_OUT, epochs=50, batch=128, lr=1e-3, lam=0.2,
 
     best_top3 = -1.0
     os.makedirs(WEIGHTS_DIR, exist_ok=True)
+    n_batches = len(train_loader)
+    log(f"[train] {n_batches} batches/epoch × {epochs} epochs — démarrage…")
     for ep in range(1, epochs + 1):
         model.train()
         run = 0.0
-        for X, mask, yt, yc, yf, yfm in train_loader:
+        t0 = time.perf_counter()
+        for bi, (X, mask, yt, yc, yf, yfm) in enumerate(train_loader):
             opt.zero_grad()
             tl, cl, fut = model(X, mask)
             loss_t = ce_target(tl, yt)
@@ -122,10 +129,14 @@ def train(out_dir=DEFAULT_OUT, epochs=50, batch=128, lr=1e-3, lam=0.2,
             loss.backward()
             opt.step()
             run += loss.item() * yt.size(0)
+            if n_batches >= 8 and (bi + 1) % max(1, n_batches // 4) == 0:
+                log(f"    ep {ep:02d} · batch {bi + 1}/{n_batches}…")
         m = evaluate(model, val_loader, bbox)
-        log(f"  ep {ep:02d} | loss {run / int(tr.sum()):.3f} "
+        dt = time.perf_counter() - t0
+        flag = "  ★ best" if m["top3"] > best_top3 else ""
+        log(f"  ep {ep:02d} | {dt:4.1f}s | loss {run / int(tr.sum()):.3f} "
             f"| target top1 {m['top1']:.3f} top3 {m['top3']:.3f} "
-            f"| class {m['cls']:.3f} | future {m['fut_m'] / 1000:.1f} km")
+            f"| class {m['cls']:.3f} | future {m['fut_m'] / 1000:.1f} km{flag}")
         if m["top3"] > best_top3:
             best_top3 = m["top3"]
             torch.save({"state_dict": model.state_dict(), "arch": arch,

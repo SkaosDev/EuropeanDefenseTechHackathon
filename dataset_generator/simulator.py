@@ -57,7 +57,7 @@ def generate_all(cfg, rng, n_drones, log=print):
     origins = cfg["origins"]
     targets = routing.build_targets(cfg)
     dca_zones = routing.build_dca_zones(cfg, targets)
-    net = sensors.build_network(cfg, rng)
+    net = sensors.build_network(cfg, rng, targets)
 
     gt_rows, events = [], []
     event_id = 0

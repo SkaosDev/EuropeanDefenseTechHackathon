@@ -29,7 +29,16 @@ export const ZONE_COLORS = {
   defense_industry: '#fff176',
 }
 export const ZONE_LABELS = {
-  city: 'City', power_tpp: 'Thermal plant', power_hpp: 'Hydro plant',
-  power_npp: 'Nuclear plant', airbase: 'Airbase', port: 'Port',
+  city: 'City', power_npp: 'Nuclear plant', airbase: 'Airbase', port: 'Port',
   defense_industry: 'Defense industry',
 }
+
+// Modalités de capteurs : couleur, libellé, glyphe (icône au zoom).
+export const MOD = {
+  acoustic: { color: '#9ae6b4', label: 'Acoustic', glyph: '🎙' },
+  optical: { color: '#7fd1ff', label: 'Optical', glyph: '📷' },
+  rf: { color: '#fc8181', label: 'RF / EW', glyph: '📡' },
+  das: { color: '#f6ad55', label: 'DAS fiber', glyph: '〜' },
+  observer: { color: '#d6bcfa', label: 'Observer', glyph: '👁' },
+}
+export const MOD_ORDER = ['acoustic', 'optical', 'rf', 'das', 'observer']

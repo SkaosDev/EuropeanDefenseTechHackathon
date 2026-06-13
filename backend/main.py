@@ -119,6 +119,14 @@ def get_sensors():
             for r in df.itertuples()]
 
 
+@app.get("/das_lines")
+def get_das_lines():
+    """Polylignes fibre DAS (pour tracer les câbles sur la carte)."""
+    w = sim_bridge.load_world()
+    lines = w["cfg"]["sensors"]["das"]["lines"]
+    return [[[float(p[0]), float(p[1])] for p in line] for line in lines]
+
+
 @app.post("/spawn")
 def spawn(req: SpawnReq):
     if req.prefer_hit:
@@ -158,16 +166,38 @@ def _interp(clock, gt_t, gt_lat, gt_lon):
             float(gt_lon[j - 1] + f * (gt_lon[j] - gt_lon[j - 1]))]
 
 
-def _event_view(e):
-    """Vue transport d'un événement (sans NaN : range_est/bearing exclus)."""
+def _event_view(e, drone_pos):
+    """Vue transport d'un événement (sans NaN) + position vraie du drone à cet instant
+    (extrémité de la ligne capteur→drone)."""
     return {
         "t": float(e["t"]),
+        "sensor_id": e.get("sensor_id"),
         "sensor_lat": float(e["sensor_lat"]),
         "sensor_lon": float(e["sensor_lon"]),
         "modality": e["modality"],
         "est_class": e["est_class"],
         "confidence": float(e["confidence"]),
         "is_clutter": e.get("drone_id") is None,
+        "drone_pos": drone_pos,
+    }
+
+
+def _fusion_summary(events):
+    """Agrège la fenêtre observée : compte par modalité, capteurs distincts, clutter."""
+    by_mod, sensors = {}, set()
+    n_clutter = 0
+    for e in events:
+        by_mod[e["modality"]] = by_mod.get(e["modality"], 0) + 1
+        if e.get("drone_id") is None:
+            n_clutter += 1
+        else:
+            sensors.add(e.get("sensor_id"))
+    return {
+        "by_modality": by_mod,
+        "n_sensors": len(sensors),
+        "n_clutter": n_clutter,
+        "n_real": len(events) - n_clutter,
+        "n_modalities": len([m for m, c in by_mod.items() if c > 0]),
     }
 
 
@@ -204,15 +234,19 @@ async def stream(ws: WebSocket):
     clock = 0.0
     sent = 0
     last_result = None
+    last_fusion = None
     last_sent = -1
     try:
         while True:
             new_events = []
             while sent < len(events) and events[sent]["t"] <= clock:
-                new_events.append(_event_view(events[sent]))
+                e = events[sent]
+                dpos = _interp(float(e["t"]), gt_t, gt_lat, gt_lon)
+                new_events.append(_event_view(e, dpos))
                 sent += 1
             if sent != last_sent and sent > 0:
                 last_result = pred.predict(events[:sent], clock_t=clock)
+                last_fusion = _fusion_summary(events[:sent])
                 last_sent = sent
             await ws.send_json({
                 "type": "tick",
@@ -221,6 +255,7 @@ async def stream(ws: WebSocket):
                 "n_events": sent,
                 "new_events": new_events,
                 "prediction": last_result,
+                "fusion": last_fusion,
             })
             if clock >= t_max:
                 break
