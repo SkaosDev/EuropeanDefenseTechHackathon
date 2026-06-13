@@ -1,0 +1,7 @@
+# Dépendances du simulateur de dataset counter-UAS.
+# Volontairement légères (pas de movingpandas / GIS lourd) pour un setup hackathon rapide.
+numpy>=1.24
+pandas>=2.0
+pyyaml>=6.0         # lecture de config.yaml
+# (géodésie haversine implémentée en pur numpy/math dans geo.py — pas de dépendance GIS)
+folium>=0.15        # carte HTML interactive pour le pitch (visualize.py uniquement)
