@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
-import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -151,12 +150,17 @@ def remap_classes(ds_root: Path) -> None:
 
 
 def resolve_device(requested: str) -> str:
-    """'auto' -> cuda (RTX) > mps (Apple Silicon) > cpu ; sinon valeur demandée."""
+    """'auto' -> cuda (tous les GPU NVIDIA) > mps (Apple Silicon) > cpu ; sinon valeur demandée."""
     if requested != "auto":
         return requested
     import torch
 
     if torch.cuda.is_available():
+        n = torch.cuda.device_count()
+        if n > 1:
+            names = ", ".join(torch.cuda.get_device_name(i) for i in range(n))
+            print(f"==> Device : CUDA x{n} ({names}) — DDP multi-GPU.")
+            return ",".join(str(i) for i in range(n))  # ex. '0,1' -> ultralytics lance DDP
         print(f"==> Device : CUDA ({torch.cuda.get_device_name(0)})")
         return "0"
     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
@@ -189,68 +193,43 @@ def resolve_mac_settings(args: argparse.Namespace) -> dict:
     return {"batch": batch, "workers": workers, "imgsz": imgsz}
 
 
-def apply_gpu_power_limit(percent: int, gpu_index: str) -> None:
-    """Plafonne la puissance (watts) du GPU NVIDIA pour ménager une carte fatiguée.
-
-    Rappel : un GPU à 100 % d'utilisation pendant l'entraînement est NORMAL et
-    n'abîme rien en soi. Ce qui use une carte, c'est la puissance soutenue (watts)
-    et la température, plus les pics de courant. On plafonne donc les watts à
-    `percent` % de la limite par défaut (TDP) via `nvidia-smi -pl` : la temp et les
-    appels de puissance brutaux baissent, pour une perte de vitesse minime (~5-8 %).
-
-    `percent` <= 0 désactive. Échec silencieux (avec consigne) si pas les droits :
-    sous Windows, modifier la limite de puissance exige une console Administrateur.
-    """
-    if percent <= 0:
-        return
-    idx = gpu_index if gpu_index.isdigit() else "0"
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "-i", idx, "--format=csv,noheader,nounits",
-             "--query-gpu=power.default_limit,power.min_limit,power.max_limit"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        default_w, min_w, max_w = (float(x) for x in out.split(","))
-    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
-        print(f"==> Limite de puissance non appliquée (lecture nvidia-smi KO) : {exc}")
-        return
-
-    target = round(default_w * percent / 100.0)
-    target = max(int(min_w), min(target, int(max_w)))  # borné au domaine autorisé
-    try:
-        subprocess.run(["nvidia-smi", "-i", idx, "-pl", str(target)],
-                       capture_output=True, text=True, check=True)
-        print(f"==> Limite de puissance GPU : {target} W "
-              f"({percent} % du TDP {default_w:.0f} W) — temp et pics de conso réduits.")
-        print(f"    Pour rétablir le défaut plus tard : nvidia-smi -i {idx} -pl {default_w:.0f}")
-    except (OSError, subprocess.CalledProcessError) as exc:
-        detail = getattr(exc, "stderr", "") or str(exc)
-        print("==> Impossible de fixer la limite de puissance (droits admin requis "
-              "sous Windows).")
-        print(f"    Lance UNE fois dans un terminal Administrateur :  "
-              f"nvidia-smi -i {idx} -pl {target}")
-        print(f"    (détail : {detail.strip()})")
-
-
 def train(ds_root: Path, args: argparse.Namespace) -> None:
     from ultralytics import YOLO
 
     device = resolve_device(args.device)
-
-    if device.isdigit():  # GPU NVIDIA (CUDA) uniquement — pas de pl sur MPS/CPU
-        apply_gpu_power_limit(args.power_limit, device)
 
     if device == "mps":
         cfg = resolve_mac_settings(args)
         batch, workers, imgsz = cfg["batch"], cfg["workers"], cfg["imgsz"]
     else:
         imgsz = args.imgsz
-        batch = args.batch if args.batch != -1 else (16 if device == "cpu" else args.batch)
-        workers = args.workers if args.workers and args.workers > 0 else 8
+        # Nombre de GPU CUDA visés : device '0' -> 1, '0,1' -> 2 ; 'cpu'/'mps' -> 0.
+        n_gpu = len(device.split(",")) if device not in ("cpu", "mps") else 0
+        if args.batch != -1:
+            batch = args.batch                       # valeur explicite imposée par l'utilisateur
+        elif device == "cpu":
+            batch = 16
+        elif n_gpu > 1:
+            # AutoBatch (-1) n'est PAS supporté en DDP multi-GPU : il faut un batch fixe.
+            # `batch` est le TOTAL réparti sur les GPU -> 64/GPU pour YOLO11n (léger) sur T4 16 Go.
+            batch = 64 * n_gpu
+        else:
+            batch = args.batch                       # -1 : AutoBatch VRAM (mono-GPU CUDA)
+        if args.workers and args.workers > 0:
+            workers = args.workers
+        elif n_gpu > 1:
+            # `workers` est PAR processus DDP : on répartit les cœurs CPU pour ne pas
+            # sur-souscrire (Kaggle T4x2 ≈ 4 vCPU -> 2 workers/GPU).
+            workers = max(2, (os.cpu_count() or 8) // n_gpu)
+        else:
+            workers = 8
 
     if device == "mps":
         print(f"==> Mac MPS : batch={batch}, workers={workers}, imgsz={imgsz}, "
               f"cache={args.cache} (24 Go unifiés exploités).")
+    elif device not in ("cpu",) and "," in device:
+        print(f"==> Multi-GPU DDP : {n_gpu} GPU, batch={batch} ({batch // n_gpu}/GPU), "
+              f"workers={workers}/GPU, imgsz={imgsz}. Si OOM, relance avec --batch plus bas.")
 
     model = YOLO(args.model)
     results = model.train(
@@ -290,17 +269,15 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--batch", type=int, default=-1,
-                        help="-1 = auto (CUDA: VRAM ; Mac MPS: 32, ou 48 avec --fast). "
-                             "Si OOM/gel sur Mac, baisse (ex. --batch 24).")
+                        help="-1 = auto (mono-GPU CUDA: VRAM ; Mac MPS: 32, ou 48 avec --fast ; "
+                             "multi-GPU DDP: 64/GPU car AutoBatch indispo). "
+                             "Si OOM/gel, baisse (ex. --batch 24). En DDP c'est le batch TOTAL.")
     parser.add_argument("--device", default="auto",
-                        help="auto (défaut : cuda > mps > cpu), '0' (GPU NVIDIA), 'mps', 'cpu'.")
-    parser.add_argument("--power-limit", type=int, default=75,
-                        help="GPU NVIDIA : plafonne la puissance à ce %% du TDP pour "
-                             "ménager la carte (temp + pics de conso). 75 = défaut "
-                             "(~262 W sur RTX 3090). 0/100 = désactive (pleine puissance). "
-                             "Modifier la limite exige un terminal Administrateur sous Windows.")
+                        help="auto (défaut : tous les GPU CUDA > mps > cpu), '0' (1 GPU NVIDIA), "
+                             "'0,1' (multi-GPU DDP), 'mps', 'cpu'.")
     parser.add_argument("--workers", type=int, default=-1,
-                        help="Threads dataloader (-1 = tous les cœurs CPU). Mac M3 = 8.")
+                        help="Threads dataloader (-1 = auto ; en DDP = cœurs CPU répartis par GPU). "
+                             "Mac M3 = 8.")
     parser.add_argument("--cache", default="disk", choices=["disk", "ram", "False"],
                         help="disk (défaut, sûr) ; ram = plus rapide mais risque OOM "
                              "sur Mac 24 Go avec ~30k images.")
