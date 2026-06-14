@@ -42,3 +42,11 @@ export const MOD = {
   observer: { color: '#d6bcfa', label: 'Observer', glyph: '👁' },
 }
 export const MOD_ORDER = ['acoustic', 'optical', 'rf', 'das', 'observer']
+
+// Temps de mission en secondes -> "<h>h<min>" (ex : 6500 s -> "1h48").
+export function fmtClock(s) {
+  if (s == null) return '—'
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return `${h}h${String(m).padStart(2, '0')}`
+}

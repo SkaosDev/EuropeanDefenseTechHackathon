@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from . import sim_bridge
+from .planner import Planner, build_assets
 
 REPO = os.path.dirname(os.path.dirname(__file__))
 SENSORS_CSV = os.path.join(REPO, "dataset_generator", "out", "sensors.csv")
@@ -125,6 +126,12 @@ def get_das_lines():
     w = sim_bridge.load_world()
     lines = w["cfg"]["sensors"]["das"]["lines"]
     return [[[float(p[0]), float(p[1])] for p in line] for line in lines]
+
+
+@app.get("/assets")
+def get_assets():
+    """Sites intercepteurs dérivés des cibles (inventaire ∝ pop/priorité)."""
+    return build_assets(sim_bridge.load_world())
 
 
 @app.post("/spawn")
@@ -230,6 +237,11 @@ async def stream(ws: WebSocket):
         speed = float(speed_q)
 
     pred = predictor()
+    world = sim_bridge.load_world()
+    # Planner consultatif, un par flux. Aucune vérité-terrain : il n'évalue que des
+    # stratégies d'interception à partir de la prédiction + des détections capteurs.
+    planner = Planner(world, scenario_id=sid)
+
     tick_real = 0.1
     clock = 0.0
     sent = 0
@@ -248,15 +260,27 @@ async def stream(ws: WebSocket):
                 last_result = pred.predict(events[:sent], clock_t=clock)
                 last_fusion = _fusion_summary(events[:sent])
                 last_sent = sent
+            # le planner évalue à CHAQUE tick les options d'interception en consommant les
+            # événements BRUTS (bearing_est/range_est) — jamais drone_pos pour décider.
+            # `truth_pos` ne sert QU'À détecter l'entrée physique de la menace dans le rayon
+            # d'interception de la ville (déclencheur d'engagement), cf. planner.
+            drone_pos = _interp(clock, gt_t, gt_lat, gt_lon)
+            intervention = planner.step(events[:sent], last_result, clock, truth_pos=drone_pos)
             await ws.send_json({
                 "type": "tick",
                 "clock": round(clock, 1),
-                "drone_pos": _interp(clock, gt_t, gt_lat, gt_lon),
+                "drone_pos": drone_pos,
                 "n_events": sent,
                 "new_events": new_events,
                 "prediction": last_result,
                 "fusion": last_fusion,
+                "intervention": intervention,
             })
+            # Engagement autonome : on a figé la solution -> on arrête la simulation.
+            if intervention["state"] == "ENGAGED":
+                await ws.send_json({"type": "done", "clock": round(clock, 1), "reason": "engaged"})
+                await ws.close()
+                return
             if clock >= t_max:
                 break
             clock = min(t_max, clock + speed * tick_real)

@@ -37,7 +37,7 @@ body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color
 .leaflet-tooltip.vec-label::before { display: none; }
 
 /* ---- Overlay panels ---- */
-.panel { position: absolute; top: 14px; bottom: 14px; width: 350px; background: var(--panel);
+.panel { position: absolute; top: 14px; bottom: 14px; width: 300px; background: var(--panel);
   border: 1px solid var(--line); border-radius: 12px; backdrop-filter: blur(8px);
   display: flex; flex-direction: column; z-index: 700; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
 .panel.left { left: 14px; }
@@ -60,7 +60,7 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn.ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
 .presets { display: flex; flex-direction: column; gap: 7px; }
-.preset { text-align: left; padding: 9px 11px; border-radius: 8px; cursor: pointer; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.preset { text-align: left; padding: 13px 11px; border-radius: 8px; cursor: pointer; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
 .preset:hover { border-color: var(--cyan); }
 .preset .pt { font-weight: 600; font-size: 12.5px; }
 .preset .pd { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
@@ -92,7 +92,7 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .modbars .mdot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .modbars .mname { width: 64px; color: var(--muted); }
 .modbars .mtrack { flex: 1; height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
-.modbars .mfill { height: 100%; }
+.modbars .mfill { display: block; height: 100%; min-width: 2px; border-radius: 4px; transition: width .25s ease; }
 .modbars .mcount { width: 26px; text-align: right; font-family: ui-monospace, monospace; }
 .feed { margin-top: 8px; }
 .feed .ev { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 6px; font-size: 11px; margin-bottom: 4px; background: var(--panel-2); border-left: 3px solid var(--line); }
@@ -114,5 +114,91 @@ select { background: var(--panel-2); color: var(--text); border: 1px solid var(-
 .legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; }
 .legend .item { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
 .legend .dot { width: 9px; height: 9px; border-radius: 50%; }
-.zoomhint { position: absolute; right: 14px; bottom: 14px; z-index: 600; background: var(--panel); border: 1px solid var(--line);
-  color: var(--muted); font-size: 11px; padding: 5px 10px; border-radius: 7px; }
+/* ---- Layers / legend overlay (bottom-right of map) ---- */
+.layers-box { position: absolute; bottom: 14px; z-index: 700; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 9px 11px; backdrop-filter: blur(8px); max-width: 210px; }
+.layers-box .toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; width: 100%;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text); border-radius: 7px; padding: 6px 9px; font-size: 12px; }
+.layers-box .toggle .sw { width: 26px; height: 14px; border-radius: 8px; background: #3a4660; position: relative; flex: none; transition: background .15s; }
+.layers-box .toggle .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: #fff; transition: left .15s; }
+.layers-box .toggle.on .sw { background: var(--cyan); }
+.layers-box .toggle.on .sw::after { left: 14px; }
+
+/* ---- Target markers (triangles, distinct from circular sensors) ---- */
+.target-mark { width: 14px; height: 14px; background: var(--tc, #aaa);
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  filter: drop-shadow(0 0 1.5px rgba(0,0,0,0.85)); cursor: pointer;
+  transition: transform .12s ease, filter .12s ease; }
+.target-mark:hover { transform: scale(1.6); filter: drop-shadow(0 0 4px rgba(255,255,255,0.55)); }
+.target-mark.is-true { width: 20px; height: 20px; background: var(--cyan);
+  filter: drop-shadow(0 0 5px var(--cyan)); }
+.target-mark.is-true:hover { transform: scale(1.35); }
+
+/* ---- Legend: sensor vs target grouping ---- */
+.legend-cap { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--muted); margin-top: 9px; opacity: 0.85; }
+.legend-sep { height: 1px; background: var(--line); margin: 9px 0 2px; }
+.legend .dot.tri { border-radius: 0; clip-path: polygon(50% 0%, 100% 100%, 0% 100%); }
+
+/* ---- Right column: threat panel + attached ground-truth card ---- */
+.panel-col { position: absolute; top: 14px; bottom: 14px; display: flex; flex-direction: column;
+  gap: 10px; z-index: 700; }
+.panel-col.left { left: 14px; width: 320px; }
+.panel-col.right { right: 14px; width: 320px; }
+.panel.flow { position: static; top: auto; bottom: auto; width: 100%; }
+.panel.flow.fill { flex: 1; min-height: 0; }
+.panel.flow.card { flex: none; }
+
+.mission-card { padding: 12px 14px; }
+.mission-head { display: flex; align-items: center; gap: 8px; margin-bottom: 11px; }
+.mission-tag { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; color: var(--amber); }
+.mission-note { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.mission-status { margin-left: auto; font-size: 9px; font-weight: 800; padding: 2px 8px;
+  border-radius: 999px; letter-spacing: 0.6px; white-space: nowrap; }
+.mission-status.lock { color: #9ae6b4; background: rgba(154,230,180,0.12); border: 1px solid rgba(154,230,180,0.4); }
+.mission-status.track { color: var(--amber); background: rgba(255,184,77,0.1); border: 1px solid rgba(255,184,77,0.35); }
+.mission-rows { display: flex; flex-direction: column; gap: 8px; }
+.mrow { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.mrow .mk { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; flex: none; }
+.mrow .mv { font-size: 13px; font-weight: 600; text-align: right; }
+.mrow .mv.mono { font-family: ui-monospace, monospace; font-weight: 500; }
+.mrow.target .mv { color: var(--cyan); }
+
+/* ============== Interception decision-support panel (consultative) ============== */
+.iv-card { padding: 0; }
+.iv-card .panel-body { padding: 12px 16px; }
+
+.iv-head-row { display: flex; align-items: center; gap: 11px; }
+.iv-logo { background: linear-gradient(135deg, var(--cyan), #1b8a8f); color: #04141a; }
+
+/* statut viabilité (carte stable : fond neutre fixe, seul le texte change) */
+.iv-verdict { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line); }
+.iv-verdict-ok { font-size: 12.5px; font-weight: 800; letter-spacing: 0.4px; color: #3fb950; }
+.iv-verdict-na { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--muted); }
+.iv-verdict-p { font-family: ui-monospace, monospace; font-weight: 800; font-size: 13px; color: var(--cyan); }
+
+/* interception options (per capable site) */
+.iv-cand { position: relative; margin-bottom: 7px; border-radius: 7px; overflow: hidden;
+  background: var(--panel-2); border: 1px solid var(--line); padding: 7px 9px; }
+.iv-cand-bar { position: absolute; left: 0; top: 0; bottom: 0;
+  background: linear-gradient(90deg, rgba(53,208,214,0.28), rgba(53,208,214,0.05)); }
+.iv-cand-row, .iv-cand-meta { position: relative; }
+.iv-cand-row { display: flex; justify-content: space-between; align-items: baseline; }
+.iv-cand-city { font-size: 12.5px; font-weight: 600; }
+.iv-cand-p { font-family: ui-monospace, monospace; font-weight: 800; color: var(--cyan); }
+.iv-cand-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; font-size: 10px; color: var(--muted); }
+.iv-cand-meta .sep { opacity: 0.5; }
+
+/* ENGAGED (terminal) — solution figée, on fait confiance à l'interception */
+.iv-engaged { border-color: rgba(63,185,80,0.5); }
+.iv-eng-banner { display: flex; align-items: center; gap: 10px; padding: 12px 16px; color: #3fb950;
+  font-weight: 800; font-size: 12.5px; letter-spacing: 0.6px;
+  background: linear-gradient(135deg, rgba(63,185,80,0.22), rgba(27,138,79,0.16));
+  border-bottom: 1px solid rgba(63,185,80,0.5); }
+.iv-eng-box { padding: 10px 12px; border-radius: 8px;
+  background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.3); }
+
+/* map overlay: capable interceptor batteries */
+.iv-site { display: grid; place-items: center; font-size: 16px; color: var(--cyan);
+  text-shadow: 0 0 8px rgba(53,208,214,0.8); filter: drop-shadow(0 0 2px #000); }

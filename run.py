@@ -7,11 +7,18 @@ Sans argument : menu interactif. Avec argument : commande directe.
   python run.py                 # menu
   python run.py setup           # crée .venv + installe deps Python & frontend (yarn)
   python run.py regen [N] [S]   # régénère le dataset (N drones, graine S ; défaut 10000 1)
-  python run.py train [EPOCHS]  # entraîne le modèle (défaut 60)
+                                #   ou tout paramètre : regen --n-drones 5000 --seed 7 --dt 5 --grid-km 8
+  python run.py train [EPOCHS]  # entraîne le modèle
+                                #   ou tout paramètre : train --epochs 80 --batch 256 --lr 5e-4 --hidden 192
+                                #   (train --help liste tous les paramètres réglables)
   python run.py eval            # accuracy par fraction d'observation
   python run.py backend         # API FastAPI sur :8000
   python run.py frontend        # interface Vite sur :5173
   python run.py demo            # backend + frontend ensemble (Ctrl+C pour arrêter)
+
+Tout argument passé après `regen`/`train` est transmis tel quel au module sous-jacent
+(`dataset_generator.main` / `model.train`). En mode menu, ces deux commandes demandent
+les paramètres de façon interactive (Entrée = valeurs par défaut).
 """
 import os
 import platform
@@ -65,16 +72,28 @@ def cmd_setup():
 
 def cmd_regen(args):
     need_venv()
-    n = args[0] if len(args) > 0 else "10000"
-    seed = args[1] if len(args) > 1 else "1"
-    run([venv_python(), "-m", "dataset_generator.main", "--n-drones", n, "--seed", seed,
-         "--out", "dataset_generator/out", "--no-viz"])
+    cmd = [venv_python(), "-m", "dataset_generator.main"]
+    if any(a.startswith("-") for a in args):
+        cmd += args                                   # passe-plat : --n-drones --seed --dt --grid-km --config --no-prep …
+    else:
+        n = args[0] if len(args) > 0 else "10000"     # rétro-compat : "regen [N] [S]"
+        seed = args[1] if len(args) > 1 else "1"
+        cmd += ["--n-drones", n, "--seed", seed]
+    if "--out" not in args:
+        cmd += ["--out", "dataset_generator/out"]
+    if "--no-viz" not in args:
+        cmd += ["--no-viz"]
+    run(cmd)
 
 
 def cmd_train(args):
     need_venv()
-    epochs = args[0] if len(args) > 0 else "60"
-    run([venv_python(), "-m", "model.train", "--epochs", epochs])
+    cmd = [venv_python(), "-m", "model.train"]
+    if len(args) == 1 and args[0].isdigit():
+        cmd += ["--epochs", args[0]]                  # rétro-compat : "train 60"
+    else:
+        cmd += args                                   # passe-plat : --epochs --batch --lr --lam --proj --hidden --layers … (et --help)
+    run(cmd)
 
 
 def cmd_eval():
@@ -109,10 +128,21 @@ def cmd_demo():
                 pass
 
 
+def _ask_args(example):
+    """Demande des paramètres en mode menu (vide = défauts)."""
+    try:
+        s = input(f"  Paramètres {example} [Entrée = défauts] : ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return []
+    return s.split()
+
+
 MENU = [
     ("setup", "Installer l'environnement (.venv + deps + yarn install)", cmd_setup),
-    ("regen", "Régénérer le dataset (10000 drones)", lambda: cmd_regen([])),
-    ("train", "Entraîner le modèle (60 epochs)", lambda: cmd_train([])),
+    ("regen", "Régénérer le dataset (paramètres réglables)",
+     lambda: cmd_regen(_ask_args("(ex: --n-drones 2000 --seed 42 --dt 5)"))),
+    ("train", "Entraîner le modèle (paramètres réglables)",
+     lambda: cmd_train(_ask_args("(ex: --epochs 80 --batch 256 --lr 5e-4 --hidden 192)"))),
     ("eval", "Évaluer (accuracy par fraction d'observation)", cmd_eval),
     ("backend", "Lancer le backend (API :8000)", cmd_backend),
     ("frontend", "Lancer le frontend (Vite :5173)", cmd_frontend),

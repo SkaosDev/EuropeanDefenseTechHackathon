@@ -1,7 +1,10 @@
 """
 train.py — entraînement offline du LSTM multi-têtes (CPU, quelques minutes).
 
-  python -m model.train [--out dataset_generator/out] [--epochs 50]
+  python -m model.train [--epochs 50] [--batch 128] [--lr 1e-3] [--lam 0.2] [--seed 0]
+                        [--proj 64] [--hidden 128] [--layers 3] [--dropout 0.3]
+                        [--lstm-dropout 0.2] [--out dataset_generator/out]
+  (l'architecture est enregistrée dans le checkpoint -> l'inférence la reprend telle quelle.)
 
 Charge sequences.npz + dataset_meta.json, split STRICTEMENT via `is_val` (anti-fuite),
 optimise CE(target, label_smoothing) + 0.3*CE(class, class_weight) + λ*MSE(future, masquée),
@@ -79,6 +82,7 @@ def evaluate(model, loader, bbox):
 
 
 def train(out_dir=DEFAULT_OUT, epochs=50, batch=128, lr=1e-3, lam=0.2,
+          proj=64, hidden=128, n_layers=3, dropout=0.3, lstm_dropout=0.2,
           seed=0, log=None):
     # logger qui FLUSH à chaque ligne (sinon les logs sont bufferisés quand stdout est
     # redirigé vers un fichier -> on croit à tort que l'entraînement est figé).
@@ -99,9 +103,9 @@ def train(out_dir=DEFAULT_OUT, epochs=50, batch=128, lr=1e-3, lam=0.2,
     log(f"[train] {int(tr.sum())} train / {int(va.sum())} val  "
         f"| targets={n_targets} classes={n_classes} future={n_future}")
 
-    arch = dict(n_feat=n_feat, proj=64, hidden=128, n_layers=3, bidir=False,
+    arch = dict(n_feat=n_feat, proj=proj, hidden=hidden, n_layers=n_layers, bidir=False,
                 n_targets=n_targets, n_classes=n_classes, n_future=n_future,
-                dropout=0.3, lstm_dropout=0.2)
+                dropout=dropout, lstm_dropout=lstm_dropout)
     model = DroneNet(**arch)
 
     class_w = _class_weights(d["y_class"][tr], n_classes)
@@ -149,13 +153,23 @@ def train(out_dir=DEFAULT_OUT, epochs=50, batch=128, lr=1e-3, lam=0.2,
 
 def _cli():
     ap = argparse.ArgumentParser(description="Entraîne le LSTM multi-têtes.")
-    ap.add_argument("--out", default=DEFAULT_OUT)
+    ap.add_argument("--out", default=DEFAULT_OUT, help="dossier dataset (sequences.npz + meta)")
     ap.add_argument("--epochs", type=int, default=50)
-    ap.add_argument("--batch", type=int, default=128)
-    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--batch", type=int, default=128, help="taille de batch (train)")
+    ap.add_argument("--lr", type=float, default=1e-3, help="learning rate (AdamW)")
     ap.add_argument("--lam", type=float, default=0.2, help="poids MSE trajectoire future")
+    ap.add_argument("--seed", type=int, default=0, help="graine torch (reproductibilité)")
+    # --- architecture (sauvegardée dans le checkpoint -> reprise auto à l'inférence) ---
+    ap.add_argument("--proj", type=int, default=64, help="dim. projection d'entrée")
+    ap.add_argument("--hidden", type=int, default=128, help="dim. cachée LSTM")
+    ap.add_argument("--layers", type=int, default=3, dest="n_layers", help="nb couches LSTM")
+    ap.add_argument("--dropout", type=float, default=0.3, help="dropout des têtes")
+    ap.add_argument("--lstm-dropout", type=float, default=0.2, dest="lstm_dropout",
+                    help="dropout inter-couches LSTM")
     args = ap.parse_args()
-    train(out_dir=args.out, epochs=args.epochs, batch=args.batch, lr=args.lr, lam=args.lam)
+    train(out_dir=args.out, epochs=args.epochs, batch=args.batch, lr=args.lr, lam=args.lam,
+          seed=args.seed, proj=args.proj, hidden=args.hidden, n_layers=args.n_layers,
+          dropout=args.dropout, lstm_dropout=args.lstm_dropout)
 
 
 if __name__ == "__main__":
